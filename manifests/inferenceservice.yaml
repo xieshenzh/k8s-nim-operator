@@ -1,28 +1,168 @@
 apiVersion: serving.kserve.io/v1beta1
 kind: InferenceService
 metadata:
+  name: {{ .Name }}
+  namespace: {{ .Namespace }}
+  labels:
+  {{- if .Labels }}
+    {{- .Labels | yaml | nindent 4 }}
+  {{- end }}
   annotations:
-    autoscaling.knative.dev/target: "10"
-  name: llama3-8b-instruct-1xgpu
+  {{- if .Annotations }}
+    {{- .Annotations | yaml | nindent 4 }}
+  {{- end }}
 spec:
   predictor:
-    minReplicas: 1
-    tolerations:
-      - effect: NoSchedule
-        key: nvidia.com/gpu
-        operator: Exists
-      - effect: NoSchedule
-        key: odh-notebook
-        operator: Exists
-    nodeSelector:
-      node.kubernetes.io/instance-type: p4d.24xlarge
-    model:
-      modelFormat:
-        name: nvidia-nim-llama3-8b-instruct
+    {{- if .Replicas }}
+    maxReplicas: {{ .Replicas }}
+    {{- end }}
+    labels:
+      app: {{ .Name }}
+    {{- if .Labels }}
+      {{- .Labels | yaml | nindent 8 }}
+    {{- end }}
+    annotations:
+    {{- if .PodAnnotations }}
+      {{- .PodAnnotations | yaml | nindent 8 }}
+    {{- end }}
+    {{- if .SchedulerName }}
+    schedulerName: {{ .SchedulerName }}
+    {{- end }}
+    serviceAccountName: {{ .ServiceAccountName }}
+    runtimeClassName: {{ .RuntimeClassName }}
+    initContainers:
+    {{- range .InitContainers }}
+    - name: {{ .Name }}
+      image: {{ .Image }}
+      {{- if .ImagePullPolicy }}
+      imagePullPolicy: {{ .ImagePullPolicy }}
+      {{- end }}
+      {{- if .Command }}
+      command:
+        {{ .Command | yaml | nindent 10 }}
+      {{- end }}
+      {{- if .Args}}
+      args:
+        {{ .Args| yaml | nindent 10 }}
+      {{- end }}
+      {{- if .WorkingDir }}
+      workingDir: {{ .WorkingDir }}
+      {{- end }}
+      {{- if .Env }}
+      env:
+        {{ .Env | yaml | nindent 10 }}
+      {{- end }}
+      {{- with .Resources }}
       resources:
-        limits:
-          nvidia.com/gpu: "1"
-        requests:
-          nvidia.com/gpu: "1"
-      runtime: nvidia-nim-llama3-8b-instruct-1.0.0
-      storageUri: pvc://nvidia-nim-pvc/
+        {{ . | yaml | nindent 10 }}
+      {{- end }}
+    {{- end }}
+    containers:
+    - name: {{ .ContainerName }}
+      ports:
+      {{- if .Ports }}
+        {{- .Ports | yaml | nindent 10 }}
+      {{- end }}
+      image: {{ .Image }}
+      imagePullPolicy: {{ .ImagePullPolicy }}
+      volumeMounts:
+      {{- range .VolumeMounts }}
+      - name: {{ .Name }}
+        mountPath: {{ .MountPath }}
+        subPath: {{ .SubPath }}
+        readOnly: {{ .ReadOnly }}
+      {{- end }}
+      env:
+      {{- if .Env }}
+        {{- .Env | yaml | nindent 10 }}
+      {{- end }}
+      {{- with .Resources }}
+      resources:
+        {{ . | yaml | nindent 10 }}
+      {{- end }}
+      {{- with .LivenessProbe }}
+      livenessProbe:
+        {{ . | yaml | nindent 10 }}
+      {{- end }}
+      {{- with .ReadinessProbe }}
+      readinessProbe:
+        {{ . | yaml | nindent 10 }}
+      {{- end }}
+      {{- with .StartupProbe }}
+      startupProbe:
+        {{ . | yaml | nindent 10 }}
+      {{- end }}
+      {{- if .PodResourceClaims }}
+    resourceClaims:
+      {{- .PodResourceClaims | yaml | nindent 10 }}
+    {{- end }}
+    volumes:
+    {{- range .Volumes }}
+    - name: {{ .Name }}
+      {{- if .ConfigMap }}
+      configMap:
+        name: {{ .ConfigMap.Name }}
+        {{- if .ConfigMap.Items }}
+        items:
+          {{- range .ConfigMap.Items }}
+          - key: {{ .Key }}
+            path: {{ .Path }}
+          {{- end }}
+        {{- end }}
+      {{- end }}
+      {{- if .Secret }}
+      secret:
+        secretName: {{ .Secret.SecretName }}
+        defaultMode: {{ .Secret.DefaultMode }}
+      {{- end }}
+      {{- if .EmptyDir }}
+      emptyDir:
+        medium: {{ .EmptyDir.Medium }}
+        {{- if .EmptyDir.SizeLimit }}
+        sizeLimit: {{ .EmptyDir.SizeLimit }}
+        {{- end }}
+      {{- end }}
+      {{- if .PersistentVolumeClaim }}
+      persistentVolumeClaim:
+        claimName: {{ .PersistentVolumeClaim.ClaimName }}
+        readOnly: {{ .PersistentVolumeClaim.ReadOnly }}
+      {{- end }}
+      {{- if .HostPath }}
+      hostPath:
+        path: {{ .HostPath.Path }}
+        type: {{ .HostPath.Type }}
+      {{- end }}
+    {{- end }}
+    {{- if .NodeSelector }}
+    nodeSelector:
+      {{- range $key, $value := .NodeSelector }}
+      {{ $key }}: {{ $value }}
+      {{- end }}
+    {{- end }}
+    {{- if .Tolerations }}
+    tolerations:
+      {{- range .Tolerations }}
+      - key: {{ .Key | quote }}
+        operator: {{ .Operator | quote }}
+        value: {{ .Value | quote }}
+        effect: {{ .Effect | quote }}
+      {{- end }}
+    {{- end }}
+    {{- if .ImagePullSecrets }}
+    imagePullSecrets:
+    {{- range .ImagePullSecrets }}
+      - name: {{ . }}
+    {{- end }}
+    {{- end }}
+    securityContext:
+      {{- if eq .OrchestratorType "TKGS" }}
+      seccompProfile:
+        type: RuntimeDefault
+      {{- end }}
+      {{- if .UserID }}
+      runAsUser: {{ .UserID }}
+      {{- end }}
+      {{- if .GroupID }}
+      runAsGroup: {{ .GroupID }}
+      fsGroup: {{ .GroupID }}
+      {{- end }}
