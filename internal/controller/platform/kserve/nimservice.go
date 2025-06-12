@@ -23,7 +23,9 @@ import (
 	"github.com/go-logr/logr"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -91,6 +93,30 @@ func (r *NIMServiceReconciler) reconcileNIMService(ctx context.Context, nimServi
 	// Get generic name for all resources
 	namespacedName := types.NamespacedName{Name: nimService.GetName(), Namespace: nimService.GetNamespace()}
 
+	// Sync serviceaccount
+	err = r.renderAndSyncResource(ctx, nimService, &corev1.ServiceAccount{}, func() (client.Object, error) {
+		return r.renderer.ServiceAccount(nimService.GetServiceAccountParams())
+	}, "serviceaccount", conditions.ReasonServiceAccountFailed)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// Sync role
+	err = r.renderAndSyncResource(ctx, nimService, &rbacv1.Role{}, func() (client.Object, error) {
+		return r.renderer.Role(nimService.GetRoleParams())
+	}, "role", conditions.ReasonRoleFailed)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// Sync rolebinding
+	err = r.renderAndSyncResource(ctx, nimService, &rbacv1.RoleBinding{}, func() (client.Object, error) {
+		return r.renderer.RoleBinding(nimService.GetRoleBindingParams())
+	}, "rolebinding", conditions.ReasonRoleBindingFailed)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// Sync Service Monitor
 	if nimService.IsServiceMonitorEnabled() {
 		err = r.renderAndSyncResource(ctx, nimService, &monitoringv1.ServiceMonitor{}, func() (client.Object, error) {
@@ -107,6 +133,8 @@ func (r *NIMServiceReconciler) reconcileNIMService(ctx context.Context, nimServi
 	} else if modelPVC == nil {
 		return ctrl.Result{}, nil
 	}
+
+	r.renderAndSyncInferenceService(ctx, nimService, modelPVC, modelProfile)
 
 	return ctrl.Result{}, nil
 }
@@ -266,10 +294,6 @@ func (r *NIMServiceReconciler) renderAndSyncCache(ctx context.Context,
 		return nil, "", err
 	}
 
-	r.renderAndSyncServingRuntime(ctx, nimService)
-
-	r.renderAndSyncInferenceService(ctx, nimService)
-
 	return modelPVC, modelProfile, nil
 }
 
@@ -322,13 +346,64 @@ func (r *NIMServiceReconciler) reconcilePVC(ctx context.Context, nimService *app
 	return &nimService.Spec.Storage.PVC, nil
 }
 
-func (r *NIMServiceReconciler) renderAndSyncServingRuntime(ctx context.Context,
-	nimService *appsv1alpha1.NIMService) {
-
-}
-
 func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context,
-	nimService *appsv1alpha1.NIMService) {
+	nimService *appsv1alpha1.NIMService, modelPVC *appsv1alpha1.PersistentVolumeClaim, modelProfile string) {
+
+	inferenceServiceParams := nimService.GetInferenceServiceParams()
+	inferenceServiceParams.OrchestratorType = string(r.orchestratorType)
+
+	// Setup volume mounts with model store
+	inferenceServiceParams.Volumes = nimService.GetVolumes(*modelPVC)
+	inferenceServiceParams.VolumeMounts = nimService.GetVolumeMounts(*modelPVC)
+
+	// Setup env for explicit override profile is specified
+	if modelProfile != "" {
+		profileEnv := corev1.EnvVar{
+			Name:  "NIM_MODEL_PROFILE",
+			Value: modelProfile,
+		}
+		inferenceServiceParams.Env = append(inferenceServiceParams.Env, profileEnv)
+
+		// Retrieve and set profile details from NIMCache
+		var profile *appsv1alpha1.NIMProfile
+		profile, err = r.getNIMCacheProfile(ctx, nimService, modelProfile)
+		if err != nil {
+			logger.Error(err, "Failed to get cached NIM profile")
+			return ctrl.Result{}, err
+		}
+
+		// Auto assign GPU resources in case of the optimized profile
+		if profile != nil {
+			if err = r.assignGPUResources(ctx, nimService, profile, deploymentParams); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+
+		// TODO: assign GPU resources and node selector that is required for the selected profile
+	}
+
+	// Setup pod resource claims
+	draResources := shared.GenerateNamedDRAResources(nimService)
+	inferenceServiceParams.PodResourceClaims = shared.GetPodResourceClaims(draResources)
+
+	// Sync deployment
+	err = r.renderAndSyncResource(ctx, nimService, &appsv1.Deployment{}, func() (client.Object, error) {
+		result, err := r.renderer.Deployment(deploymentParams)
+		if err != nil {
+			return nil, err
+		}
+		initContainers := nimService.GetInitContainers()
+		if len(initContainers) > 0 {
+			result.Spec.Template.Spec.InitContainers = initContainers
+		}
+		// Update Container resources with DRA resource claims.
+		shared.UpdateContainerResourceClaims(result.Spec.Template.Spec.Containers, draResources)
+		return result, err
+
+	}, "deployment", conditions.ReasonDeploymentFailed)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 
 }
 

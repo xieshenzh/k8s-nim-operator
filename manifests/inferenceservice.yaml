@@ -14,16 +14,20 @@ metadata:
 spec:
   predictor:
     {{- if .Replicas }}
-    maxReplicas: {{ .Replicas }}
+    minReplicas: {{ .Replicas }}
     {{- end }}
+    deploymentStrategy:
+      type: RollingUpdate
+      rollingUpdate:
+        maxUnavailable: 25%
+        maxSurge: 0
     labels:
-      app: {{ .Name }}
-    {{- if .Labels }}
-      {{- .Labels | yaml | nindent 8 }}
+    {{- if .SelectorLabels }}
+      {{- .SelectorLabels | yaml | nindent 6 }}
     {{- end }}
     annotations:
     {{- if .PodAnnotations }}
-      {{- .PodAnnotations | yaml | nindent 8 }}
+      {{- .PodAnnotations | yaml | nindent 6 }}
     {{- end }}
     {{- if .SchedulerName }}
     schedulerName: {{ .SchedulerName }}
@@ -39,29 +43,29 @@ spec:
       {{- end }}
       {{- if .Command }}
       command:
-        {{ .Command | yaml | nindent 10 }}
+        {{ .Command | yaml | nindent 8 }}
       {{- end }}
       {{- if .Args}}
       args:
-        {{ .Args| yaml | nindent 10 }}
+        {{ .Args| yaml | nindent 8 }}
       {{- end }}
       {{- if .WorkingDir }}
       workingDir: {{ .WorkingDir }}
       {{- end }}
       {{- if .Env }}
       env:
-        {{ .Env | yaml | nindent 10 }}
+        {{ .Env | yaml | nindent 8 }}
       {{- end }}
       {{- with .Resources }}
       resources:
-        {{ . | yaml | nindent 10 }}
+        {{ . | yaml | nindent 8 }}
       {{- end }}
     {{- end }}
     containers:
     - name: {{ .ContainerName }}
       ports:
       {{- if .Ports }}
-        {{- .Ports | yaml | nindent 10 }}
+        {{- .Ports | yaml | nindent 8 }}
       {{- end }}
       image: {{ .Image }}
       imagePullPolicy: {{ .ImagePullPolicy }}
@@ -74,27 +78,27 @@ spec:
       {{- end }}
       env:
       {{- if .Env }}
-        {{- .Env | yaml | nindent 10 }}
+        {{- .Env | yaml | nindent 8 }}
       {{- end }}
       {{- with .Resources }}
       resources:
-        {{ . | yaml | nindent 10 }}
+        {{ . | yaml | nindent 8 }}
       {{- end }}
       {{- with .LivenessProbe }}
       livenessProbe:
-        {{ . | yaml | nindent 10 }}
+        {{ . | yaml | nindent 8 }}
       {{- end }}
       {{- with .ReadinessProbe }}
       readinessProbe:
-        {{ . | yaml | nindent 10 }}
+        {{ . | yaml | nindent 8 }}
       {{- end }}
       {{- with .StartupProbe }}
       startupProbe:
-        {{ . | yaml | nindent 10 }}
+        {{ . | yaml | nindent 8 }}
       {{- end }}
       {{- if .PodResourceClaims }}
     resourceClaims:
-      {{- .PodResourceClaims | yaml | nindent 10 }}
+      {{- .PodResourceClaims | yaml | nindent 8 }}
     {{- end }}
     volumes:
     {{- range .Volumes }}
@@ -148,6 +152,10 @@ spec:
         effect: {{ .Effect | quote }}
       {{- end }}
     {{- end }}
+    {{ - with .Affinity }}
+    affinity:
+      {{ . | yaml | nindent 6 }}
+    {{ - end }}
     {{- if .ImagePullSecrets }}
     imagePullSecrets:
     {{- range .ImagePullSecrets }}

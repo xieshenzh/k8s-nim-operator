@@ -1441,6 +1441,86 @@ func (n *NIMService) GetProxySpec() *ProxySpec {
 	return n.Spec.Proxy
 }
 
+// GetInferenceServiceParams returns params to render InferenceService from templates.
+func (n *NIMService) GetInferenceServiceParams() *rendertypes.InferenceServiceParams {
+	params := &rendertypes.InferenceServiceParams{}
+
+	// Set metadata
+	params.Name = n.GetName()
+	params.Namespace = n.GetNamespace()
+	params.Labels = n.GetServiceLabels()
+	params.Annotations = n.GetNIMServiceAnnotations()
+	params.PodAnnotations = n.GetNIMServiceAnnotations()
+	delete(params.PodAnnotations, utils.NvidiaAnnotationParentSpecHashKey)
+
+	// Set template spec
+	if !n.IsAutoScalingEnabled() {
+		params.Replicas = n.GetReplicas()
+	}
+	params.NodeSelector = n.GetNodeSelector()
+	params.Tolerations = n.GetTolerations()
+	params.Affinity = n.GetPodAffinity()
+	params.ImagePullSecrets = n.GetImagePullSecrets()
+	params.ImagePullPolicy = n.GetImagePullPolicy()
+
+	// Set labels and selectors
+	params.SelectorLabels = n.GetSelectorLabels()
+
+	// Set container spec
+	params.ContainerName = n.GetContainerName()
+	params.Env = n.GetEnv()
+	params.Args = n.GetArgs()
+	params.Command = n.GetCommand()
+	params.Resources = n.GetResources()
+	params.Image = n.GetImage()
+
+	// Set container probes
+	if IsProbeEnabled(n.Spec.LivenessProbe) {
+		params.LivenessProbe = n.GetLivenessProbe()
+	}
+	if IsProbeEnabled(n.Spec.ReadinessProbe) {
+		params.ReadinessProbe = n.GetReadinessProbe()
+	}
+	if IsProbeEnabled(n.Spec.StartupProbe) {
+		params.StartupProbe = n.GetStartupProbe()
+	}
+	params.UserID = n.GetUserID()
+	params.GroupID = n.GetGroupID()
+
+	// Set service account
+	params.ServiceAccountName = n.GetServiceAccountName()
+
+	// Set runtime class
+	params.RuntimeClassName = n.GetRuntimeClassName()
+
+	// Set scheduler
+	params.SchedulerName = n.GetSchedulerName()
+
+	// Setup container ports for nimservice
+	params.Ports = []corev1.ContainerPort{
+		{
+			Name:          DefaultNamedPortAPI,
+			Protocol:      corev1.ProtocolTCP,
+			ContainerPort: *n.Spec.Expose.Service.Port,
+		},
+	}
+	if n.Spec.Expose.Service.GRPCPort != nil {
+		params.Ports = append(params.Ports, corev1.ContainerPort{
+			Name:          DefaultNamedPortGRPC,
+			Protocol:      corev1.ProtocolTCP,
+			ContainerPort: *n.Spec.Expose.Service.GRPCPort,
+		})
+	}
+	if n.Spec.Expose.Service.MetricsPort != nil {
+		params.Ports = append(params.Ports, corev1.ContainerPort{
+			Name:          DefaultNamedPortMetrics,
+			Protocol:      corev1.ProtocolTCP,
+			ContainerPort: *n.Spec.Expose.Service.MetricsPort,
+		})
+	}
+	return params
+}
+
 func init() {
 	SchemeBuilder.Register(&NIMService{}, &NIMServiceList{})
 }
