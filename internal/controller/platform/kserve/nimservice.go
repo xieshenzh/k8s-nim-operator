@@ -21,13 +21,14 @@ import (
 	"fmt"
 
 	"github.com/go-logr/logr"
+	kservev1beta1 "github.com/kserve/kserve/pkg/apis/serving/v1beta1"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	apiResource "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -40,6 +41,7 @@ import (
 	"github.com/NVIDIA/k8s-nim-operator/internal/conditions"
 	"github.com/NVIDIA/k8s-nim-operator/internal/k8sutil"
 	"github.com/NVIDIA/k8s-nim-operator/internal/render"
+	rendertypes "github.com/NVIDIA/k8s-nim-operator/internal/render/types"
 	"github.com/NVIDIA/k8s-nim-operator/internal/shared"
 	"github.com/NVIDIA/k8s-nim-operator/internal/utils"
 )
@@ -129,12 +131,15 @@ func (r *NIMServiceReconciler) reconcileNIMService(ctx context.Context, nimServi
 
 	modelPVC, modelProfile, errCache := r.renderAndSyncCache(ctx, nimService)
 	if errCache != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, errCache
 	} else if modelPVC == nil {
 		return ctrl.Result{}, nil
 	}
 
-	r.renderAndSyncInferenceService(ctx, nimService, modelPVC, modelProfile)
+	err = r.renderAndSyncInferenceService(ctx, nimService, modelPVC, modelProfile)
+	if err != nil {
+
+	}
 
 	return ctrl.Result{}, nil
 }
@@ -347,7 +352,8 @@ func (r *NIMServiceReconciler) reconcilePVC(ctx context.Context, nimService *app
 }
 
 func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context,
-	nimService *appsv1alpha1.NIMService, modelPVC *appsv1alpha1.PersistentVolumeClaim, modelProfile string) {
+	nimService *appsv1alpha1.NIMService, modelPVC *appsv1alpha1.PersistentVolumeClaim, modelProfile string) error {
+	logger := r.log
 
 	inferenceServiceParams := nimService.GetInferenceServiceParams()
 	inferenceServiceParams.OrchestratorType = string(r.orchestratorType)
@@ -366,16 +372,17 @@ func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context
 
 		// Retrieve and set profile details from NIMCache
 		var profile *appsv1alpha1.NIMProfile
+		var err error
 		profile, err = r.getNIMCacheProfile(ctx, nimService, modelProfile)
 		if err != nil {
 			logger.Error(err, "Failed to get cached NIM profile")
-			return ctrl.Result{}, err
+			return err
 		}
 
 		// Auto assign GPU resources in case of the optimized profile
 		if profile != nil {
-			if err = r.assignGPUResources(ctx, nimService, profile, deploymentParams); err != nil {
-				return ctrl.Result{}, err
+			if err = r.assignGPUResources(ctx, nimService, profile, inferenceServiceParams); err != nil {
+				return err
 			}
 		}
 
@@ -386,25 +393,143 @@ func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context
 	draResources := shared.GenerateNamedDRAResources(nimService)
 	inferenceServiceParams.PodResourceClaims = shared.GetPodResourceClaims(draResources)
 
-	// Sync deployment
-	err = r.renderAndSyncResource(ctx, nimService, &appsv1.Deployment{}, func() (client.Object, error) {
-		result, err := r.renderer.Deployment(deploymentParams)
+	// Sync InferenceService
+	err := r.renderAndSyncResource(ctx, nimService, &kservev1beta1.InferenceService{}, func() (client.Object, error) {
+		result, err := r.renderer.InferenceService(inferenceServiceParams)
 		if err != nil {
 			return nil, err
 		}
 		initContainers := nimService.GetInitContainers()
 		if len(initContainers) > 0 {
-			result.Spec.Template.Spec.InitContainers = initContainers
+			result.Spec.Predictor.InitContainers = initContainers
 		}
 		// Update Container resources with DRA resource claims.
-		shared.UpdateContainerResourceClaims(result.Spec.Template.Spec.Containers, draResources)
+		shared.UpdateContainerResourceClaims(result.Spec.Predictor.Containers, draResources)
 		return result, err
 
-	}, "deployment", conditions.ReasonDeploymentFailed)
+	}, "inferenceservice", conditions.ReasonInferenceServiceFailed)
 	if err != nil {
-		return ctrl.Result{}, err
+		return err
 	}
 
+	return nil
+}
+
+// getNIMCacheProfile returns model profile info from the NIM cache instance.
+func (r *NIMServiceReconciler) getNIMCacheProfile(ctx context.Context, nimService *appsv1alpha1.NIMService, profile string) (*appsv1alpha1.NIMProfile, error) {
+	logger := r.log
+
+	if nimService.GetNIMCacheName() == "" {
+		// NIM cache is not used
+		return nil, nil
+	}
+
+	// Lookup NIMCache instance in the same namespace as the NIMService instance
+	nimCache := &appsv1alpha1.NIMCache{}
+	if err := r.Get(ctx, types.NamespacedName{Name: nimService.GetNIMCacheName(), Namespace: nimService.Namespace}, nimCache); err != nil {
+		logger.Error(err, "unable to fetch nimcache", "nimcache", nimService.GetNIMCacheName(), "nimservice", nimService.Name)
+		return nil, err
+	}
+
+	// Get the status of NIMCache
+	if nimCache.Status.State != appsv1alpha1.NimCacheStatusReady {
+		return nil, fmt.Errorf("nimcache %s is not ready, nimservice %s", nimCache.GetName(), nimService.GetName())
+	}
+
+	for _, cachedProfile := range nimCache.Status.Profiles {
+		if cachedProfile.Name == profile {
+			return &cachedProfile, nil
+		}
+	}
+
+	// If the specified profile is not cached, return nil
+	return nil, nil
+}
+
+// assignGPUResources automatically assigns GPU resources to the NIMService based on the provided profile,
+// but retains any user-specified GPU resources if they are explicitly provided.
+//
+// This function retrieves the tensor parallelism (TP) value from the provided profile config to determine
+// the number of GPUs to be allocated. If the TP value is defined and no GPU resources have been
+// explicitly provided by the user, the function allocates GPUs according to the TP value.
+// If the TP value is not present, the function defaults to allocating 1 GPU.
+func (r *NIMServiceReconciler) assignGPUResources(ctx context.Context, nimService *appsv1alpha1.NIMService, profile *appsv1alpha1.NIMProfile, inferenceServiceParams *rendertypes.InferenceServiceParams) error {
+	logger := r.log
+
+	// TODO: Refine this to detect GPU claims and only assign GPU resources if no GPU claims are present.
+	if len(nimService.Spec.DRAResources) > 0 {
+		logger.Info("DRAResources found, skipping GPU resource assignment", "DRAResources", nimService.Spec.DRAResources)
+		return nil
+	}
+
+	// TODO: Make the resource name configurable
+	const gpuResourceName = corev1.ResourceName("nvidia.com/gpu")
+
+	// Check if the user has already provided a GPU resource quantity in the requests or limits
+	if inferenceServiceParams.Resources != nil {
+		if _, gpuRequested := inferenceServiceParams.Resources.Requests[gpuResourceName]; gpuRequested {
+			logger.V(2).Info("User has provided GPU resource requests, skipping auto-assignment", "gpuResource", gpuResourceName)
+			return nil
+		}
+		if _, gpuLimit := inferenceServiceParams.Resources.Limits[gpuResourceName]; gpuLimit {
+			logger.V(2).Info("User has provided GPU resource limits, skipping auto-assignment", "gpuResource", gpuResourceName)
+			return nil
+		}
+	}
+
+	// If no user-provided GPU resource is found, proceed with auto-assignment
+	// Get tensorParallelism from the profile
+	tensorParallelism, err := r.getTensorParallelismByProfile(profile)
+	if err != nil {
+		logger.Error(err, "Failed to retrieve tensorParallelism")
+		return err
+	}
+
+	// Initialize the Resources field if not already initialized
+	if inferenceServiceParams.Resources == nil {
+		inferenceServiceParams.Resources = &corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{},
+			Limits:   corev1.ResourceList{},
+		}
+	}
+
+	// Assign GPU resources based on tensorParallelism, or default to 1 GPU if tensorParallelism is not available
+	gpuQuantity := apiResource.MustParse("1") // Default to 1 GPU
+
+	if tensorParallelism != "" {
+		gpuQuantity, err = apiResource.ParseQuantity(tensorParallelism)
+		if err != nil {
+			return fmt.Errorf("failed to parse tensorParallelism: %w", err)
+		}
+
+		logger.V(2).Info("Auto-assigning GPU resources based on tensorParallelism", "tensorParallelism", tensorParallelism, "gpuQuantity", gpuQuantity.String())
+	} else {
+		logger.V(2).Info("tensorParallelism not found, assigning 1 GPU by default", "Profile", profile.Name)
+	}
+
+	// Assign the GPU quantity for both requests and limits
+	inferenceServiceParams.Resources.Requests[gpuResourceName] = gpuQuantity
+	inferenceServiceParams.Resources.Limits[gpuResourceName] = gpuQuantity
+
+	return nil
+}
+
+// getTensorParallelismByProfile returns the value of tensor parallelism parameter in the given NIM profile.
+func (r *NIMServiceReconciler) getTensorParallelismByProfile(profile *appsv1alpha1.NIMProfile) (string, error) {
+	// List of possible keys for tensor parallelism
+	possibleKeys := []string{"tensorParallelism", "tp"}
+
+	tensorParallelism := ""
+
+	// Iterate through possible keys and return the first valid value
+	for _, key := range possibleKeys {
+		if value, exists := profile.Config[key]; exists {
+			tensorParallelism = value
+			break
+		}
+	}
+
+	return tensorParallelism, nil
 }
 
 func (r *NIMServiceReconciler) isInferenceServiceReady(ctx context.Context, namespacedName *types.NamespacedName) {
