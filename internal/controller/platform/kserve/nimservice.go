@@ -19,10 +19,13 @@ package kserve
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/go-logr/logr"
 	kservev1beta1 "github.com/kserve/kserve/pkg/apis/serving/v1beta1"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
+	knativeapis "knative.dev/pkg/apis"
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -36,10 +39,12 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	appsv1alpha1 "github.com/NVIDIA/k8s-nim-operator/api/apps/v1alpha1"
 	"github.com/NVIDIA/k8s-nim-operator/internal/conditions"
 	"github.com/NVIDIA/k8s-nim-operator/internal/k8sutil"
+	"github.com/NVIDIA/k8s-nim-operator/internal/nimmodels"
 	"github.com/NVIDIA/k8s-nim-operator/internal/render"
 	rendertypes "github.com/NVIDIA/k8s-nim-operator/internal/render/types"
 	"github.com/NVIDIA/k8s-nim-operator/internal/shared"
@@ -81,8 +86,6 @@ func (r *NIMServiceReconciler) cleanupNIMService(ctx context.Context, nimService
 }
 
 func (r *NIMServiceReconciler) reconcileNIMService(ctx context.Context, nimService *appsv1alpha1.NIMService) (ctrl.Result, error) {
-	logger := r.log
-
 	var err error
 	defer func() {
 		if err != nil {
@@ -90,10 +93,6 @@ func (r *NIMServiceReconciler) reconcileNIMService(ctx context.Context, nimServi
 				"NIMService %s failed, msg: %s", nimService.Name, err.Error())
 		}
 	}()
-
-	// Generate annotation for the current operator-version and apply to all resources
-	// Get generic name for all resources
-	namespacedName := types.NamespacedName{Name: nimService.GetName(), Namespace: nimService.GetNamespace()}
 
 	// Sync serviceaccount
 	err = r.renderAndSyncResource(ctx, nimService, &corev1.ServiceAccount{}, func() (client.Object, error) {
@@ -138,10 +137,17 @@ func (r *NIMServiceReconciler) reconcileNIMService(ctx context.Context, nimServi
 
 	err = r.renderAndSyncInferenceService(ctx, nimService, modelPVC, modelProfile)
 	if err != nil {
-
+		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{}, nil
+	if result, err := r.checkInferenceServiceStatus(ctx,
+		&types.NamespacedName{Name: nimService.GetName(), Namespace: nimService.GetNamespace()},
+		nimService); err != nil {
+		r.log.Error(err, "Unable to update status")
+		return ctrl.Result{}, err
+	} else {
+		return *result, err
+	}
 }
 
 func (r *NIMServiceReconciler) renderAndSyncResource(ctx context.Context, nimService *appsv1alpha1.NIMService,
@@ -355,12 +361,12 @@ func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context
 	nimService *appsv1alpha1.NIMService, modelPVC *appsv1alpha1.PersistentVolumeClaim, modelProfile string) error {
 	logger := r.log
 
-	inferenceServiceParams := nimService.GetInferenceServiceParams()
-	inferenceServiceParams.OrchestratorType = string(r.orchestratorType)
+	isvcParams := nimService.GetInferenceServiceParams()
+	isvcParams.OrchestratorType = string(r.orchestratorType)
 
 	// Setup volume mounts with model store
-	inferenceServiceParams.Volumes = nimService.GetVolumes(*modelPVC)
-	inferenceServiceParams.VolumeMounts = nimService.GetVolumeMounts(*modelPVC)
+	isvcParams.Volumes = nimService.GetVolumes(*modelPVC)
+	isvcParams.VolumeMounts = nimService.GetVolumeMounts(*modelPVC)
 
 	// Setup env for explicit override profile is specified
 	if modelProfile != "" {
@@ -368,7 +374,7 @@ func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context
 			Name:  "NIM_MODEL_PROFILE",
 			Value: modelProfile,
 		}
-		inferenceServiceParams.Env = append(inferenceServiceParams.Env, profileEnv)
+		isvcParams.Env = append(isvcParams.Env, profileEnv)
 
 		// Retrieve and set profile details from NIMCache
 		var profile *appsv1alpha1.NIMProfile
@@ -381,7 +387,7 @@ func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context
 
 		// Auto assign GPU resources in case of the optimized profile
 		if profile != nil {
-			if err = r.assignGPUResources(ctx, nimService, profile, inferenceServiceParams); err != nil {
+			if err = r.assignGPUResources(ctx, nimService, profile, isvcParams); err != nil {
 				return err
 			}
 		}
@@ -391,11 +397,11 @@ func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context
 
 	// Setup pod resource claims
 	draResources := shared.GenerateNamedDRAResources(nimService)
-	inferenceServiceParams.PodResourceClaims = shared.GetPodResourceClaims(draResources)
+	isvcParams.PodResourceClaims = shared.GetPodResourceClaims(draResources)
 
 	// Sync InferenceService
 	err := r.renderAndSyncResource(ctx, nimService, &kservev1beta1.InferenceService{}, func() (client.Object, error) {
-		result, err := r.renderer.InferenceService(inferenceServiceParams)
+		result, err := r.renderer.InferenceService(isvcParams)
 		if err != nil {
 			return nil, err
 		}
@@ -453,7 +459,8 @@ func (r *NIMServiceReconciler) getNIMCacheProfile(ctx context.Context, nimServic
 // the number of GPUs to be allocated. If the TP value is defined and no GPU resources have been
 // explicitly provided by the user, the function allocates GPUs according to the TP value.
 // If the TP value is not present, the function defaults to allocating 1 GPU.
-func (r *NIMServiceReconciler) assignGPUResources(ctx context.Context, nimService *appsv1alpha1.NIMService, profile *appsv1alpha1.NIMProfile, inferenceServiceParams *rendertypes.InferenceServiceParams) error {
+func (r *NIMServiceReconciler) assignGPUResources(ctx context.Context, nimService *appsv1alpha1.NIMService,
+	profile *appsv1alpha1.NIMProfile, isvcParams *rendertypes.InferenceServiceParams) error {
 	logger := r.log
 
 	// TODO: Refine this to detect GPU claims and only assign GPU resources if no GPU claims are present.
@@ -466,12 +473,12 @@ func (r *NIMServiceReconciler) assignGPUResources(ctx context.Context, nimServic
 	const gpuResourceName = corev1.ResourceName("nvidia.com/gpu")
 
 	// Check if the user has already provided a GPU resource quantity in the requests or limits
-	if inferenceServiceParams.Resources != nil {
-		if _, gpuRequested := inferenceServiceParams.Resources.Requests[gpuResourceName]; gpuRequested {
+	if isvcParams.Resources != nil {
+		if _, gpuRequested := isvcParams.Resources.Requests[gpuResourceName]; gpuRequested {
 			logger.V(2).Info("User has provided GPU resource requests, skipping auto-assignment", "gpuResource", gpuResourceName)
 			return nil
 		}
-		if _, gpuLimit := inferenceServiceParams.Resources.Limits[gpuResourceName]; gpuLimit {
+		if _, gpuLimit := isvcParams.Resources.Limits[gpuResourceName]; gpuLimit {
 			logger.V(2).Info("User has provided GPU resource limits, skipping auto-assignment", "gpuResource", gpuResourceName)
 			return nil
 		}
@@ -486,8 +493,8 @@ func (r *NIMServiceReconciler) assignGPUResources(ctx context.Context, nimServic
 	}
 
 	// Initialize the Resources field if not already initialized
-	if inferenceServiceParams.Resources == nil {
-		inferenceServiceParams.Resources = &corev1.ResourceRequirements{
+	if isvcParams.Resources == nil {
+		isvcParams.Resources = &corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{},
 			Limits:   corev1.ResourceList{},
 		}
@@ -508,8 +515,8 @@ func (r *NIMServiceReconciler) assignGPUResources(ctx context.Context, nimServic
 	}
 
 	// Assign the GPU quantity for both requests and limits
-	inferenceServiceParams.Resources.Requests[gpuResourceName] = gpuQuantity
-	inferenceServiceParams.Resources.Limits[gpuResourceName] = gpuQuantity
+	isvcParams.Resources.Requests[gpuResourceName] = gpuQuantity
+	isvcParams.Resources.Limits[gpuResourceName] = gpuQuantity
 
 	return nil
 }
@@ -532,5 +539,179 @@ func (r *NIMServiceReconciler) getTensorParallelismByProfile(profile *appsv1alph
 	return tensorParallelism, nil
 }
 
-func (r *NIMServiceReconciler) isInferenceServiceReady(ctx context.Context, namespacedName *types.NamespacedName) {
+func (r *NIMServiceReconciler) checkInferenceServiceStatus(ctx context.Context, namespacedName *types.NamespacedName,
+	nimService *appsv1alpha1.NIMService) (*ctrl.Result, error) {
+	logger := r.log
+
+	// Wait for deployment
+	msg, ready, err := r.isInferenceServiceReady(ctx, namespacedName)
+	if err != nil {
+		return &ctrl.Result{}, err
+	}
+
+	if !ready {
+		// Update status as NotReady
+		err = r.updater.SetConditionsNotReady(ctx, nimService, conditions.NotReady, msg)
+		r.recorder.Eventf(nimService, corev1.EventTypeNormal, conditions.NotReady,
+			"NIMService %s not ready yet, msg: %s", nimService.Name, msg)
+	} else {
+		// Update NIMServiceStatus with model config.
+		updateErr := r.updateModelStatus(ctx, nimService, namespacedName)
+		if updateErr != nil {
+			logger.Info("WARN: Model status update failed, will retry in 5 seconds", "error", updateErr.Error())
+			return &ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+
+		// Update status as ready
+		err = r.updater.SetConditionsReady(ctx, nimService, conditions.Ready, msg)
+		r.recorder.Eventf(nimService, corev1.EventTypeNormal, conditions.Ready,
+			"NIMService %s ready, msg: %s", nimService.Name, msg)
+	}
+
+	return &ctrl.Result{}, nil
+}
+
+// isInferenceServiceReady checks if the InferenceService is ready.
+func (r *NIMServiceReconciler) isInferenceServiceReady(ctx context.Context, namespacedName *types.NamespacedName) (string, bool, error) {
+	isvc := &kservev1beta1.InferenceService{}
+	err := r.Get(ctx, client.ObjectKey{Name: namespacedName.Name, Namespace: namespacedName.Namespace}, isvc)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+
+	var cond knativeapis.Condition
+	for i := range isvc.Status.Conditions {
+		c := isvc.Status.Conditions[i]
+		if c.Type == kservev1beta1.PredictorReady {
+			cond = c
+			break
+		}
+	}
+	return cond.GetMessage(), cond.IsTrue(), nil
+}
+
+func (r *NIMServiceReconciler) updateModelStatus(ctx context.Context, nimService *appsv1alpha1.NIMService,
+	namespacedName *types.NamespacedName) error {
+	clusterEndpoint, externalEndpoint, err := r.getNIMModelEndpoints(ctx, nimService, namespacedName)
+	if err != nil {
+		return err
+	}
+	modelName, err := r.getNIMModelName(ctx, clusterEndpoint)
+	if err != nil {
+		return err
+	}
+	nimService.Status.Model = &appsv1alpha1.ModelStatus{
+		Name:             modelName,
+		ClusterEndpoint:  clusterEndpoint,
+		ExternalEndpoint: externalEndpoint,
+	}
+
+	return nil
+}
+
+func (r *NIMServiceReconciler) getNIMModelEndpoints(ctx context.Context, nimService *appsv1alpha1.NIMService,
+	namespacedName *types.NamespacedName) (string, string, error) {
+	logger := r.log
+
+	isvc := &kservev1beta1.InferenceService{}
+	err := r.Get(ctx, client.ObjectKey{Name: namespacedName.Name, Namespace: namespacedName.Namespace}, isvc)
+	if err != nil {
+		logger.Error(err, "unable to fetch k8s service", "nimservice", nimService.GetName())
+		return "", "", err
+	}
+
+	var externalEndpoint string
+	if isvc.Status.URL != nil {
+		externalEndpoint = isvc.Status.URL.String()
+	} else {
+		err := fmt.Errorf("external endpoint not available, nimservice %s", nimService.GetName())
+		logger.Error(err, "unable to get external endpoint", "nimservice", nimService.GetName(), "inferenceservice", isvc.GetName())
+		return "", "", err
+	}
+
+	var clusterEndpoint string
+	if isvc.Status.Address != nil && isvc.Status.Address.URL != nil {
+		clusterEndpoint = isvc.Status.Address.URL.String()
+	} else {
+		err := fmt.Errorf("cluster endpoint not available, nimservice %s", nimService.GetName())
+		logger.Error(err, "unable to get cluster endpoint", "nimservice", nimService.GetName(), "inferenceservice", isvc.GetName())
+		return "", "", err
+	}
+
+	return clusterEndpoint, externalEndpoint, nil
+}
+
+func (r *NIMServiceReconciler) getNIMModelName(ctx context.Context, nimServiceEndpoint string) (string, error) {
+	logger := log.FromContext(ctx)
+
+	// List nimservice /v1/models endpoint.
+	modelsList, err := nimmodels.ListModelsV1(ctx, nimServiceEndpoint)
+	if err != nil {
+		logger.Error(err, "Failed to list models", "endpoint", nimServiceEndpoint)
+		// Check if it's an HTTP error with a status code
+		if nimmodels.IsNotFound(err) {
+			// The endpoint does not exist
+			logger.V(2).Error(err, "URI does not exist", "uri", nimmodels.ModelsV1URI, "endpoint", nimServiceEndpoint)
+			metadata, err := nimmodels.GetMetadataV1(ctx, nimServiceEndpoint)
+			if err != nil {
+				logger.Error(err, "Failed to get metadata", "endpoint", nimServiceEndpoint)
+				if nimmodels.IsNotFound(err) {
+					logger.V(2).Error(err, "URI does not exist", "uri", nimmodels.MetadataV1URI, "endpoint", nimServiceEndpoint)
+					return "", nil
+				}
+				return "", err
+			}
+			modelName, err := getModelNameFromMetadata(metadata)
+			if err != nil {
+				logger.V(2).Error(err, "Failed to get model name from metadata", "endpoint", nimServiceEndpoint)
+				return "", nil
+			}
+
+			return modelName, nil
+		}
+
+		return "", err
+	}
+
+	modelName, err := getModelNameFromModelsList(modelsList)
+	if err != nil {
+		logger.V(2).Error(err, "Failed to get model name from models list", "endpoint", nimServiceEndpoint)
+		return "", nil
+	}
+	return modelName, nil
+}
+
+func getModelNameFromMetadata(metadata *nimmodels.MetadataV1) (string, error) {
+	if len(metadata.ModelInfo) == 0 {
+		return "", fmt.Errorf("no model info found")
+	}
+	return strings.Split(metadata.ModelInfo[0].ShortName, ":")[0], nil
+}
+
+func getModelNameFromModelsList(modelsList *nimmodels.ModelsV1List) (string, error) {
+	if modelsList.Object != nimmodels.ObjectTypeList {
+		return "", fmt.Errorf("unexpected object type: %s", modelsList.Object)
+	}
+
+	if len(modelsList.Data) == 0 {
+		return "", fmt.Errorf("no models found")
+	}
+
+	if len(modelsList.Data) == 1 {
+		return modelsList.Data[0].Id, nil
+	}
+
+	for _, model := range modelsList.Data {
+		if model.Object != nimmodels.ObjectTypeModel {
+			continue
+		}
+		if model.Root != nil && *model.Root == model.Id {
+			return model.Id, nil
+		}
+	}
+
+	return "", fmt.Errorf("no valid model found")
 }
