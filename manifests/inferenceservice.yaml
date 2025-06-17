@@ -16,23 +16,25 @@ spec:
     {{- if .MinReplicas }}
     minReplicas: {{ .MinReplicas }}
     {{- end }}
-    { { - if .MaxReplicas } }
-    maxReplicas: { { .MaxReplicas } }
-    { { - end } }
-    { { - if .ScaleMetricType } }
-    scaleMetricType: { { .ScaleMetricType } }
-    { { - end } }
-    { { - if .ScaleMetric } }
-    scaleMetric: { { .ScaleMetric } }
-    { { - end } }
-    { { - if .ScaleTarget } }
-    scaleTarget: { { .ScaleTarget } }
-    { { - end } }
+    {{- if .MaxReplicas }}
+    maxReplicas: {{ .MaxReplicas }}
+    {{- end }}
+    {{- if .ScaleMetricType }}
+    scaleMetricType: {{ .ScaleMetricType }}
+    {{- end }}
+    {{- if .ScaleMetric }}
+    scaleMetric: {{ .ScaleMetric }}
+    {{- end }}
+    {{- if .ScaleTarget }}
+    scaleTarget: {{ .ScaleTarget }}
+    {{- end }}
+    {{- if .IsAutoScalingEnabled }}
     deploymentStrategy:
       type: RollingUpdate
       rollingUpdate:
         maxUnavailable: 25%
         maxSurge: 0
+    {{- end }}
     labels:
     {{- if .SelectorLabels }}
       {{- .SelectorLabels | yaml | nindent 6 }}
@@ -164,10 +166,10 @@ spec:
         effect: {{ .Effect | quote }}
       {{- end }}
     {{- end }}
-    {{ - with .Affinity }}
+    {{- with .Affinity }}
     affinity:
       {{ . | yaml | nindent 6 }}
-    {{ - end }}
+    {{- end }}
     {{- if .ImagePullSecrets }}
     imagePullSecrets:
     {{- range .ImagePullSecrets }}

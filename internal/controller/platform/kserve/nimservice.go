@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -136,7 +137,7 @@ func (r *NIMServiceReconciler) reconcileNIMService(ctx context.Context, nimServi
 	// Sync Service Monitor
 	if nimService.IsServiceMonitorEnabled() {
 		err = r.renderAndSyncResource(ctx, nimService, &monitoringv1.ServiceMonitor{}, func() (client.Object, error) {
-			return r.renderer.ServiceMonitor(nimService.GetServiceMonitorParams())
+			return r.renderer.ServiceMonitor(getServiceMonitorParams(nimService))
 		}, "servicemonitor", conditions.ReasonServiceMonitorFailed)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -418,11 +419,7 @@ func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context
 	isvcParams.Annotations["serving.kserve.io/enable-metric-aggregation"] = "true"
 	isvcParams.Annotations["serving.kserve.io/enable-prometheus-scraping"] = "true"
 	isvcParams.Annotations["prometheus.kserve.io/path"] = "/metrics"
-	if nimService.Spec.Expose.Service.MetricsPort != nil {
-		isvcParams.Annotations["prometheus.kserve.io/port"] = string(*nimService.Spec.Expose.Service.MetricsPort)
-	} else {
-		isvcParams.Annotations["prometheus.kserve.io/port"] = "8000"
-	}
+	isvcParams.Annotations["prometheus.kserve.io/port"] = "8000"
 
 	// Sync InferenceService
 	err := r.renderAndSyncResource(ctx, nimService, &kservev1beta1.InferenceService{}, func() (client.Object, error) {
@@ -820,4 +817,38 @@ func getModelNameFromModelsList(modelsList *nimmodels.ModelsV1List) (string, err
 	}
 
 	return "", fmt.Errorf("no valid model found")
+}
+
+func getServiceMonitorParams(nimService *appsv1alpha1.NIMService) *rendertypes.ServiceMonitorParams {
+	params := &rendertypes.ServiceMonitorParams{}
+	serviceMonitor := nimService.GetServiceMonitor()
+	params.Enabled = nimService.IsServiceMonitorEnabled()
+	params.Name = nimService.GetName()
+	params.Namespace = nimService.GetNamespace()
+	svcLabels := nimService.GetServiceLabels()
+	maps.Copy(svcLabels, serviceMonitor.AdditionalLabels)
+	params.Labels = svcLabels
+	params.Annotations = nimService.GetServiceMonitorAnnotations()
+
+	// Set Service Monitor spec
+	smSpec := monitoringv1.ServiceMonitorSpec{
+		NamespaceSelector: monitoringv1.NamespaceSelector{MatchNames: []string{nimService.Namespace}},
+		Selector:          metav1.LabelSelector{MatchLabels: nimService.GetServiceLabels()},
+		Endpoints: []monitoringv1.Endpoint{
+			{
+				Path:          "/metrics",
+				Port:          "http-autometric",
+				ScrapeTimeout: serviceMonitor.ScrapeTimeout,
+				Interval:      serviceMonitor.Interval,
+			},
+			{
+				Path:          "/metrics",
+				Port:          "http-usermetric",
+				ScrapeTimeout: serviceMonitor.ScrapeTimeout,
+				Interval:      serviceMonitor.Interval,
+			},
+		},
+	}
+	params.SMSpec = smSpec
+	return params
 }

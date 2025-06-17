@@ -1388,7 +1388,6 @@ func (n *NIMService) GetServiceMonitorParams() *rendertypes.ServiceMonitorParams
 			},
 		},
 	}
-	//todo
 	if n.Spec.Expose.Service.MetricsPort != nil {
 		smSpec.Endpoints = append(smSpec.Endpoints, monitoringv1.Endpoint{
 			Path:          "/metrics",
@@ -1455,7 +1454,8 @@ func (n *NIMService) GetInferenceServiceParams() *rendertypes.InferenceServicePa
 	delete(params.PodAnnotations, utils.NvidiaAnnotationParentSpecHashKey)
 
 	// Set template spec
-	if !n.IsAutoScalingEnabled() {
+	params.IsAutoScalingEnabled = n.IsAutoScalingEnabled()
+	if !params.IsAutoScalingEnabled {
 		params.MinReplicas = int32(n.GetReplicas())
 	} else {
 		hpa := n.GetHPA()
@@ -1531,19 +1531,20 @@ func (n *NIMService) GetInferenceServiceParams() *rendertypes.InferenceServicePa
 	params.SchedulerName = n.GetSchedulerName()
 
 	// Setup container ports for nimservice
-	params.Ports = []corev1.ContainerPort{
-		{
-			Name:          DefaultNamedPortAPI,
-			Protocol:      corev1.ProtocolTCP,
-			ContainerPort: *n.Spec.Expose.Service.Port,
-		},
-	}
 	if n.Spec.Expose.Service.GRPCPort != nil {
 		params.Ports = append(params.Ports, corev1.ContainerPort{
 			Name:          DefaultNamedPortGRPC,
 			Protocol:      corev1.ProtocolTCP,
 			ContainerPort: *n.Spec.Expose.Service.GRPCPort,
 		})
+	} else {
+		params.Ports = []corev1.ContainerPort{
+			{
+				Name:          DefaultNamedPortAPI,
+				Protocol:      corev1.ProtocolTCP,
+				ContainerPort: *n.Spec.Expose.Service.Port,
+			},
+		}
 	}
 	return params
 }
