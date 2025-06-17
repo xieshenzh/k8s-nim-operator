@@ -18,6 +18,7 @@ package kserve
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -29,12 +30,14 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	resourcev1beta2 "k8s.io/api/resource/v1beta2"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	apiResource "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -59,8 +62,9 @@ const (
 // NIMServiceReconciler represents the NIMService reconciler instance for KServe platform.
 type NIMServiceReconciler struct {
 	client.Client
-	scheme *runtime.Scheme
-	log    logr.Logger
+	scheme          *runtime.Scheme
+	log             logr.Logger
+	discoveryClient discovery.DiscoveryInterface
 
 	updater          conditions.Updater
 	renderer         render.Renderer
@@ -93,6 +97,17 @@ func (r *NIMServiceReconciler) reconcileNIMService(ctx context.Context, nimServi
 				"NIMService %s failed, msg: %s", nimService.Name, err.Error())
 		}
 	}()
+
+	// Validations.
+	isValid, msg, err := r.validateDRAResources(ctx, nimService)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !isValid {
+		err = r.updater.SetConditionsFailed(ctx, nimService, conditions.ReasonDRAResourcesUnsupported, msg)
+		r.recorder.Eventf(nimService, corev1.EventTypeWarning, conditions.Failed, msg)
+		return ctrl.Result{}, err
+	}
 
 	// Sync serviceaccount
 	err = r.renderAndSyncResource(ctx, nimService, &corev1.ServiceAccount{}, func() (client.Object, error) {
@@ -157,7 +172,7 @@ func (r *NIMServiceReconciler) renderAndSyncResource(ctx context.Context, nimSer
 	namespacedName := types.NamespacedName{Name: nimService.GetName(), Namespace: nimService.GetNamespace()}
 
 	err := r.Get(ctx, namespacedName, obj)
-	if err != nil && !errors.IsNotFound(err) {
+	if err != nil && !k8serrors.IsNotFound(err) {
 		logger.Error(err, fmt.Sprintf("Error is not NotFound for %s: %v", obj.GetObjectKind(), err))
 		return err
 	}
@@ -227,7 +242,7 @@ func (r *NIMServiceReconciler) renderAndSyncCache(ctx context.Context,
 		nimCache := appsv1alpha1.NIMCache{}
 		if err := r.Get(ctx, types.NamespacedName{Name: nimCacheName, Namespace: nimService.GetNamespace()}, &nimCache); err != nil {
 			// Fail the NIMService if the NIMCache is not found
-			if errors.IsNotFound(err) {
+			if k8serrors.IsNotFound(err) {
 				msg := fmt.Sprintf("NIMCache %s not found", nimCacheName)
 				statusUpdateErr := r.updater.SetConditionsFailed(ctx, nimService, conditions.ReasonNIMCacheNotFound, msg)
 				r.recorder.Eventf(nimService, corev1.EventTypeWarning, conditions.Failed, msg)
@@ -396,8 +411,8 @@ func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context
 	}
 
 	// Setup pod resource claims
-	draResources := shared.GenerateNamedDRAResources(nimService)
-	isvcParams.PodResourceClaims = shared.GetPodResourceClaims(draResources)
+	namedDraResources := shared.GenerateNamedDRAResources(nimService)
+	isvcParams.PodResourceClaims = shared.GetPodResourceClaims(namedDraResources)
 
 	// Setup metrics exporting
 	isvcParams.Annotations["serving.kserve.io/enable-metric-aggregation"] = "true"
@@ -420,7 +435,7 @@ func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context
 			result.Spec.Predictor.InitContainers = initContainers
 		}
 		// Update Container resources with DRA resource claims.
-		shared.UpdateContainerResourceClaims(result.Spec.Predictor.Containers, draResources)
+		shared.UpdateContainerResourceClaims(result.Spec.Predictor.Containers, namedDraResources)
 		return result, err
 
 	}, "inferenceservice", conditions.ReasonInferenceServiceFailed)
@@ -553,12 +568,25 @@ func (r *NIMServiceReconciler) checkInferenceServiceStatus(ctx context.Context, 
 	nimService *appsv1alpha1.NIMService) (*ctrl.Result, error) {
 	logger := r.log
 
-	// Wait for deployment
+	// Check if InferenceService is ready
 	msg, ready, err := r.isInferenceServiceReady(ctx, namespacedName)
 	if err != nil {
 		return &ctrl.Result{}, err
 	}
 
+	namedDraResources := shared.GenerateNamedDRAResources(nimService)
+	if len(namedDraResources) > 0 {
+		// Update NIMServiceStatus with resource claims.
+		updateErr := r.updateResourceClaimStatus(ctx, nimService, namedDraResources)
+		if updateErr != nil {
+			logger.Info("WARN: Resource claim status update failed, will retry in 5 seconds", "error", updateErr.Error())
+			return &ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+	}
+
+	// TODO: Rework NIMService Status to split into MODIFY and APPLY phases for better readability
+	// (Currently we're using `updater.SetConditions*` to implicitly take all previous changes and
+	// apply them along with the conditions.)
 	if !ready {
 		// Update status as NotReady
 		err = r.updater.SetConditionsNotReady(ctx, nimService, conditions.NotReady, msg)
@@ -578,6 +606,11 @@ func (r *NIMServiceReconciler) checkInferenceServiceStatus(ctx context.Context, 
 			"NIMService %s ready, msg: %s", nimService.Name, msg)
 	}
 
+	if err != nil {
+		logger.Error(err, "failed to update status", "nimservice", nimService.Name, "state", conditions.Ready)
+		return &ctrl.Result{}, err
+	}
+
 	return &ctrl.Result{}, nil
 }
 
@@ -586,7 +619,7 @@ func (r *NIMServiceReconciler) isInferenceServiceReady(ctx context.Context, name
 	isvc := &kservev1beta1.InferenceService{}
 	err := r.Get(ctx, client.ObjectKey{Name: namespacedName.Name, Namespace: namespacedName.Namespace}, isvc)
 	if err != nil {
-		if errors.IsNotFound(err) {
+		if k8serrors.IsNotFound(err) {
 			return "", false, nil
 		}
 		return "", false, err
@@ -693,6 +726,68 @@ func (r *NIMServiceReconciler) getNIMModelName(ctx context.Context, nimServiceEn
 		return "", nil
 	}
 	return modelName, nil
+}
+
+// TODO: Move to validation webhook.
+func (r *NIMServiceReconciler) validateDRAResources(ctx context.Context, nimService *appsv1alpha1.NIMService) (bool, string, error) {
+	logger := log.FromContext(ctx)
+
+	if len(nimService.Spec.DRAResources) == 0 {
+		return true, "", nil
+	}
+
+	// Check if the cluster version is supported for DRA resources
+	clusterVersion, err := k8sutil.GetClusterVersion(r.discoveryClient)
+	if err != nil {
+		logger.Error(err, "failed to get cluster version")
+		return false, "", err
+	}
+	if !utils.IsVersionGreaterThanOrEqual(clusterVersion, utils.MinSupportedClusterVersionForDRA) {
+		msg := fmt.Sprintf("DRA resources are not supported by NIM-Operator on this cluster, please upgrade to k8s version '%s' or higher", utils.MinSupportedClusterVersionForDRA)
+		logger.Error(errors.New(msg), msg, "nimService", nimService.Name)
+		return false, msg, nil
+	}
+
+	// Check if the resource claim CRD exists
+	crdExists, err := k8sutil.CRDExists(r.discoveryClient, resourcev1beta2.SchemeGroupVersion.WithResource("resourceclaims"))
+	if err != nil {
+		logger.Error(err, "failed to check if resource claim CRD exists")
+		return false, "", err
+	}
+	if !crdExists {
+		msg := "DRA resources are not supported by NIM-Operator on this cluster, please ensure resource.k8s.io/v1beta2 API group is enabled"
+		logger.Error(fmt.Errorf("%s", msg), msg, "nimService", nimService.Name)
+		return false, msg, nil
+	}
+
+	// Check if duplicate resource claim names are provided
+	resourceClaimNames := make(map[string]bool)
+	for idx, resource := range nimService.Spec.DRAResources {
+		if resource.ResourceClaimName == nil {
+			continue
+		}
+
+		if _, ok := resourceClaimNames[*resource.ResourceClaimName]; ok {
+			msg := fmt.Sprintf("spec.draResources[%d].resourceClaimName: duplicate resource claim name: '%s'", idx, *resource.ResourceClaimName)
+			logger.Error(errors.New(msg), msg, "nimService", nimService.Name)
+			return false, msg, nil
+		}
+		resourceClaimNames[*resource.ResourceClaimName] = true
+	}
+	return true, "", nil
+}
+
+func (r *NIMServiceReconciler) updateResourceClaimStatus(ctx context.Context, nimService *appsv1alpha1.NIMService, namedDraResources []shared.NamedDRAResource) error {
+	logger := log.FromContext(ctx)
+
+	resourceClaimStatus, err := shared.GenerateDRAResourceStatus(ctx, r.Client, nimService.GetNamespace(), namedDraResources)
+	if err != nil {
+		logger.Error(err, "Failed to generate resource claim status", "nimservice", nimService.Name)
+		return err
+	}
+
+	nimService.Status.DRAResourceStatuses = resourceClaimStatus
+	return nil
 }
 
 func getModelNameFromMetadata(metadata *nimmodels.MetadataV1) (string, error) {
