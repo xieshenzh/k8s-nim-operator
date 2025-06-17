@@ -1456,15 +1456,41 @@ func (n *NIMService) GetInferenceServiceParams() *rendertypes.InferenceServicePa
 
 	// Set template spec
 	if !n.IsAutoScalingEnabled() {
-		params.MinReplicas = n.GetReplicas()
+		params.MinReplicas = int32(n.GetReplicas())
 	} else {
 		hpa := n.GetHPA()
-		if hpa.MinReplicas != nil {
-			params.MinReplicas = int(*hpa.MinReplicas)
-		}
-		params.MaxReplicas = int(hpa.MaxReplicas)
 
+		if hpa.MinReplicas != nil {
+			params.MinReplicas = *hpa.MinReplicas
+		}
+		params.MaxReplicas = hpa.MaxReplicas
+
+		for _, m := range hpa.Metrics {
+			if m.Type == autoscalingv2.ResourceMetricSourceType && m.Resource != nil {
+				if m.Resource.Name == corev1.ResourceCPU || m.Resource.Name == corev1.ResourceMemory {
+					params.ScaleMetric = string(m.Resource.Name)
+					params.ScaleMetricType = string(m.Resource.Target.Type)
+
+					switch m.Resource.Target.Type {
+					case autoscalingv2.UtilizationMetricType:
+						if m.Resource.Target.AverageUtilization != nil {
+							params.ScaleTarget = *m.Resource.Target.AverageUtilization
+						}
+					case autoscalingv2.ValueMetricType:
+						if m.Resource.Target.Value != nil {
+							params.ScaleTarget = int32((*m.Resource.Target.Value).Value())
+						}
+					case autoscalingv2.AverageValueMetricType:
+						if m.Resource.Target.AverageValue != nil {
+							params.ScaleTarget = int32((*m.Resource.Target.AverageValue).Value())
+						}
+					}
+					break
+				}
+			}
+		}
 	}
+
 	params.NodeSelector = n.GetNodeSelector()
 	params.Tolerations = n.GetTolerations()
 	params.Affinity = n.GetPodAffinity()

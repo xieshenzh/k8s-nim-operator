@@ -19,6 +19,15 @@ spec:
     { { - if .MaxReplicas } }
     maxReplicas: { { .MaxReplicas } }
     { { - end } }
+    { { - if .ScaleMetricType } }
+    scaleMetricType: { { .ScaleMetricType } }
+    { { - end } }
+    { { - if .ScaleMetric } }
+    scaleMetric: { { .ScaleMetric } }
+    { { - end } }
+    { { - if .ScaleTarget } }
+    scaleTarget: { { .ScaleTarget } }
+    { { - end } }
     deploymentStrategy:
       type: RollingUpdate
       rollingUpdate:
