@@ -1388,6 +1388,7 @@ func (n *NIMService) GetServiceMonitorParams() *rendertypes.ServiceMonitorParams
 			},
 		},
 	}
+	//todo
 	if n.Spec.Expose.Service.MetricsPort != nil {
 		smSpec.Endpoints = append(smSpec.Endpoints, monitoringv1.Endpoint{
 			Path:          "/metrics",
@@ -1455,7 +1456,14 @@ func (n *NIMService) GetInferenceServiceParams() *rendertypes.InferenceServicePa
 
 	// Set template spec
 	if !n.IsAutoScalingEnabled() {
-		params.Replicas = n.GetReplicas()
+		params.MinReplicas = n.GetReplicas()
+	} else {
+		hpa := n.GetHPA()
+		if hpa.MinReplicas != nil {
+			params.MinReplicas = int(*hpa.MinReplicas)
+		}
+		params.MaxReplicas = int(hpa.MaxReplicas)
+
 	}
 	params.NodeSelector = n.GetNodeSelector()
 	params.Tolerations = n.GetTolerations()
@@ -1509,13 +1517,6 @@ func (n *NIMService) GetInferenceServiceParams() *rendertypes.InferenceServicePa
 			Name:          DefaultNamedPortGRPC,
 			Protocol:      corev1.ProtocolTCP,
 			ContainerPort: *n.Spec.Expose.Service.GRPCPort,
-		})
-	}
-	if n.Spec.Expose.Service.MetricsPort != nil {
-		params.Ports = append(params.Ports, corev1.ContainerPort{
-			Name:          DefaultNamedPortMetrics,
-			Protocol:      corev1.ProtocolTCP,
-			ContainerPort: *n.Spec.Expose.Service.MetricsPort,
 		})
 	}
 	return params

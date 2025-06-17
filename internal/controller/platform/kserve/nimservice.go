@@ -399,6 +399,16 @@ func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context
 	draResources := shared.GenerateNamedDRAResources(nimService)
 	isvcParams.PodResourceClaims = shared.GetPodResourceClaims(draResources)
 
+	// Setup metrics exporting
+	isvcParams.Annotations["serving.kserve.io/enable-metric-aggregation"] = "true"
+	isvcParams.Annotations["serving.kserve.io/enable-prometheus-scraping"] = "true"
+	isvcParams.Annotations["prometheus.kserve.io/path"] = "/metrics"
+	if nimService.Spec.Expose.Service.MetricsPort != nil {
+		isvcParams.Annotations["prometheus.kserve.io/port"] = string(*nimService.Spec.Expose.Service.MetricsPort)
+	} else {
+		isvcParams.Annotations["prometheus.kserve.io/port"] = "8000"
+	}
+
 	// Sync InferenceService
 	err := r.renderAndSyncResource(ctx, nimService, &kservev1beta1.InferenceService{}, func() (client.Object, error) {
 		result, err := r.renderer.InferenceService(isvcParams)
@@ -599,6 +609,7 @@ func (r *NIMServiceReconciler) updateModelStatus(ctx context.Context, nimService
 	if err != nil {
 		return err
 	}
+	//todo
 	modelName, err := r.getNIMModelName(ctx, clusterEndpoint)
 	if err != nil {
 		return err

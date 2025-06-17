@@ -13,9 +13,12 @@ metadata:
   {{- end }}
 spec:
   predictor:
-    {{- if .Replicas }}
-    minReplicas: {{ .Replicas }}
+    {{- if .MinReplicas }}
+    minReplicas: {{ .MinReplicas }}
     {{- end }}
+    { { - if .MaxReplicas } }
+    maxReplicas: { { .MaxReplicas } }
+    { { - end } }
     deploymentStrategy:
       type: RollingUpdate
       rollingUpdate:

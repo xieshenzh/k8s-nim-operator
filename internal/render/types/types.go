@@ -278,7 +278,8 @@ type InferenceServiceParams struct {
 	Annotations        map[string]string
 	PodAnnotations     map[string]string
 	SelectorLabels     map[string]string
-	Replicas           int
+	MinReplicas        int
+	MaxReplicas        int
 	ContainerName      string
 	Args               []string
 	Command            []string
