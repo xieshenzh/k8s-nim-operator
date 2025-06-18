@@ -1510,14 +1510,87 @@ func (n *NIMService) GetInferenceServiceParams() *rendertypes.InferenceServicePa
 
 	// Set container probes
 	if IsProbeEnabled(n.Spec.LivenessProbe) {
-		params.LivenessProbe = n.GetLivenessProbe()
+		if n.Spec.LivenessProbe.Probe == nil {
+			params.LivenessProbe = &corev1.Probe{
+				InitialDelaySeconds: 15,
+				TimeoutSeconds:      1,
+				PeriodSeconds:       10,
+				SuccessThreshold:    1,
+				FailureThreshold:    3,
+			}
+			if n.Spec.Expose.Service.GRPCPort != nil {
+				params.LivenessProbe.ProbeHandler = corev1.ProbeHandler{
+					GRPC: &corev1.GRPCAction{
+						Port: *n.Spec.Expose.Service.GRPCPort,
+					},
+				}
+			} else {
+				params.LivenessProbe.ProbeHandler = corev1.ProbeHandler{
+					HTTPGet: &corev1.HTTPGetAction{
+						Path: "/v1/health/live",
+						Port: intstr.FromInt32(*n.Spec.Expose.Service.Port),
+					},
+				}
+			}
+		} else {
+			params.LivenessProbe = n.Spec.LivenessProbe.Probe
+		}
 	}
 	if IsProbeEnabled(n.Spec.ReadinessProbe) {
-		params.ReadinessProbe = n.GetReadinessProbe()
+		if n.Spec.ReadinessProbe.Probe == nil {
+			params.ReadinessProbe = &corev1.Probe{
+				InitialDelaySeconds: 15,
+				TimeoutSeconds:      1,
+				PeriodSeconds:       10,
+				SuccessThreshold:    1,
+				FailureThreshold:    3,
+			}
+			if n.Spec.Expose.Service.GRPCPort != nil {
+				params.ReadinessProbe.ProbeHandler = corev1.ProbeHandler{
+					GRPC: &corev1.GRPCAction{
+						Port: *n.Spec.Expose.Service.GRPCPort,
+					},
+				}
+			} else {
+				params.ReadinessProbe.ProbeHandler = corev1.ProbeHandler{
+					HTTPGet: &corev1.HTTPGetAction{
+						Path: "/v1/health/ready",
+						Port: intstr.FromInt32(*n.Spec.Expose.Service.Port),
+					},
+				}
+			}
+		} else {
+			params.ReadinessProbe = n.Spec.ReadinessProbe.Probe
+		}
 	}
 	if IsProbeEnabled(n.Spec.StartupProbe) {
-		params.StartupProbe = n.GetStartupProbe()
+		if n.Spec.StartupProbe.Probe == nil {
+			params.StartupProbe = &corev1.Probe{
+				InitialDelaySeconds: 30,
+				TimeoutSeconds:      1,
+				PeriodSeconds:       10,
+				SuccessThreshold:    1,
+				FailureThreshold:    30,
+			}
+			if n.Spec.Expose.Service.GRPCPort != nil {
+				params.StartupProbe.ProbeHandler = corev1.ProbeHandler{
+					GRPC: &corev1.GRPCAction{
+						Port: *n.Spec.Expose.Service.GRPCPort,
+					},
+				}
+			} else {
+				params.StartupProbe.ProbeHandler = corev1.ProbeHandler{
+					HTTPGet: &corev1.HTTPGetAction{
+						Path: "/v1/health/ready",
+						Port: intstr.FromInt32(*n.Spec.Expose.Service.Port),
+					},
+				}
+			}
+		} else {
+			params.StartupProbe = n.Spec.StartupProbe.Probe
+		}
 	}
+
 	params.UserID = n.GetUserID()
 	params.GroupID = n.GetGroupID()
 
@@ -1533,14 +1606,12 @@ func (n *NIMService) GetInferenceServiceParams() *rendertypes.InferenceServicePa
 	// Setup container ports for nimservice
 	if n.Spec.Expose.Service.GRPCPort != nil {
 		params.Ports = append(params.Ports, corev1.ContainerPort{
-			Name:          DefaultNamedPortGRPC,
 			Protocol:      corev1.ProtocolTCP,
 			ContainerPort: *n.Spec.Expose.Service.GRPCPort,
 		})
 	} else {
 		params.Ports = []corev1.ContainerPort{
 			{
-				Name:          DefaultNamedPortAPI,
 				Protocol:      corev1.ProtocolTCP,
 				ContainerPort: *n.Spec.Expose.Service.Port,
 			},

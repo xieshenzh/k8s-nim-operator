@@ -176,15 +176,3 @@ spec:
       - name: {{ . }}
     {{- end }}
     {{- end }}
-    securityContext:
-      {{- if eq .OrchestratorType "TKGS" }}
-      seccompProfile:
-        type: RuntimeDefault
-      {{- end }}
-      {{- if .UserID }}
-      runAsUser: {{ .UserID }}
-      {{- end }}
-      {{- if .GroupID }}
-      runAsGroup: {{ .GroupID }}
-      fsGroup: {{ .GroupID }}
-      {{- end }}
