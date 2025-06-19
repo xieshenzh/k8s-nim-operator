@@ -795,13 +795,13 @@ func (r *NIMServiceReconciler) validateDRAResources(ctx context.Context, nimServ
 func (r *NIMServiceReconciler) updateResourceClaimStatus(ctx context.Context, nimService *appsv1alpha1.NIMService, namedDraResources []shared.NamedDRAResource) error {
 	logger := log.FromContext(ctx)
 
-	resourceClaimStatus, err := shared.GenerateDRAResourceStatus(ctx, r.Client, nimService.GetNamespace(), namedDraResources)
+	draResourceStatuses, err := shared.GenerateDRAResourceStatuses(ctx, r.Client, nimService.GetNamespace(), namedDraResources)
 	if err != nil {
-		logger.Error(err, "Failed to generate resource claim status", "nimservice", nimService.Name)
+		logger.Error(err, "Failed to generate DRA resource statuses", "nimservice", nimService.Name)
 		return err
 	}
 
-	nimService.Status.DRAResourceStatuses = resourceClaimStatus
+	nimService.Status.DRAResourceStatuses = draResourceStatuses
 	return nil
 }
 
