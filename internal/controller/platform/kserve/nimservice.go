@@ -26,9 +26,13 @@ import (
 
 	"github.com/go-logr/logr"
 	kservev1beta1 "github.com/kserve/kserve/pkg/apis/serving/v1beta1"
+	kserveconstants "github.com/kserve/kserve/pkg/constants"
+	isvcutils "github.com/kserve/kserve/pkg/controller/v1beta1/inferenceservice/utils"
+	kserveutils "github.com/kserve/kserve/pkg/utils"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	knativeapis "knative.dev/pkg/apis"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	resourcev1beta2 "k8s.io/api/resource/v1beta2"
@@ -74,14 +78,18 @@ type NIMServiceReconciler struct {
 }
 
 // NewNIMServiceReconciler returns NIMServiceReconciler for KServe platform.
-func NewNIMServiceReconciler(r shared.Reconciler) *NIMServiceReconciler {
+func NewNIMServiceReconciler(ctx context.Context, r shared.Reconciler) *NIMServiceReconciler {
+	orchestratorType, _ := r.GetOrchestratorType(ctx)
+
 	return &NIMServiceReconciler{
-		Client:   r.GetClient(),
-		scheme:   r.GetScheme(),
-		log:      r.GetLogger(),
-		updater:  r.GetUpdater(),
-		renderer: render.NewRenderer(ManifestsDir),
-		recorder: r.GetEventRecorder(),
+		Client:           r.GetClient(),
+		scheme:           r.GetScheme(),
+		log:              r.GetLogger(),
+		discoveryClient:  r.GetDiscoveryClient(),
+		updater:          r.GetUpdater(),
+		renderer:         render.NewRenderer(ManifestsDir),
+		recorder:         r.GetEventRecorder(),
+		orchestratorType: orchestratorType,
 	}
 }
 
@@ -421,6 +429,13 @@ func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context
 	isvcParams.Annotations["prometheus.kserve.io/path"] = "/metrics"
 	isvcParams.Annotations["prometheus.kserve.io/port"] = "8000"
 
+	// Check KServe deployment mode
+	if deploymentMode, err := r.getKServeDeploymentMode(ctx, isvcParams); err != nil {
+		return err
+	} else {
+		isvcParams.DeploymentMode = string(deploymentMode)
+	}
+
 	// Sync InferenceService
 	err := r.renderAndSyncResource(ctx, nimService, &kservev1beta1.InferenceService{}, func() (client.Object, error) {
 		result, err := r.renderer.InferenceService(isvcParams)
@@ -613,9 +628,12 @@ func (r *NIMServiceReconciler) checkInferenceServiceStatus(ctx context.Context, 
 
 // isInferenceServiceReady checks if the InferenceService is ready.
 func (r *NIMServiceReconciler) isInferenceServiceReady(ctx context.Context, namespacedName *types.NamespacedName) (string, bool, error) {
+	logger := r.log
+
 	isvc := &kservev1beta1.InferenceService{}
 	err := r.Get(ctx, client.ObjectKey{Name: namespacedName.Name, Namespace: namespacedName.Namespace}, isvc)
 	if err != nil {
+		logger.Error(err, "failed to fetch inferenceservice")
 		if k8serrors.IsNotFound(err) {
 			return "", false, nil
 		}
@@ -851,4 +869,52 @@ func getServiceMonitorParams(nimService *appsv1alpha1.NIMService) *rendertypes.S
 	}
 	params.SMSpec = smSpec
 	return params
+}
+
+func (r *NIMServiceReconciler) getKServeDeploymentMode(ctx context.Context,
+	isvcParams *rendertypes.InferenceServiceParams) (kserveconstants.DeploymentModeType, error) {
+
+	var namespace string
+	deploymentList := &appsv1.DeploymentList{}
+	if err := r.List(ctx, deploymentList, client.HasLabels{"app.kubernetes.io/name: kserve-controller-manager"}); err != nil {
+		return "", err
+	}
+	for _, deployment := range deploymentList.Items {
+		if deployment.GetName() == "kserve-controller-manager" {
+			namespace = deployment.Namespace
+			break
+		}
+	}
+
+	if namespace == "" {
+		return "", fmt.Errorf("failed to find the namespace of KServe Deployment")
+	}
+
+	isvcConfigMap := &corev1.ConfigMap{}
+	err := r.Get(ctx,
+		types.NamespacedName{
+			Name:      kserveconstants.InferenceServiceConfigMapName,
+			Namespace: namespace},
+		isvcConfigMap)
+	if err != nil {
+		return "", err
+	}
+
+	isvcConfig, err := kservev1beta1.NewInferenceServicesConfig(isvcConfigMap)
+	if err != nil {
+		return "", err
+	}
+
+	// get annotations from isvc
+	annotations := kserveutils.Filter(isvcParams.Annotations, func(key string) bool {
+		return !kserveutils.Includes(isvcConfig.ServiceAnnotationDisallowedList, key)
+	})
+
+	deployConfig, err := kservev1beta1.NewDeployConfig(isvcConfigMap)
+	if err != nil {
+		return "", err
+	}
+
+	deploymentMode := isvcutils.GetDeploymentMode(annotations, deployConfig)
+	return deploymentMode, nil
 }

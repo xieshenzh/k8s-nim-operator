@@ -38,7 +38,7 @@ func (k *KServe) Delete(ctx context.Context, r shared.Reconciler, resource clien
 
 	nimService, ok := resource.(*appsv1alpha1.NIMService)
 	if ok {
-		reconciler := NewNIMServiceReconciler(r)
+		reconciler := NewNIMServiceReconciler(ctx, r)
 		err := reconciler.cleanupNIMService(ctx, nimService)
 		if err != nil {
 			logger.Error(err, "failed to cleanup nimservice resources", "name", nimService.Name)
@@ -55,7 +55,7 @@ func (s *KServe) Sync(ctx context.Context, r shared.Reconciler, resource client.
 
 	nimService, ok := resource.(*appsv1alpha1.NIMService)
 	if ok {
-		reconciler := NewNIMServiceReconciler(r)
+		reconciler := NewNIMServiceReconciler(ctx, r)
 
 		logger.Info("Reconciling NIMService instance", "nimservice", nimService.GetName())
 		result, err := reconciler.reconcileNIMService(ctx, nimService)

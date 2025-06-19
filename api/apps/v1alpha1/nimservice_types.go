@@ -1454,8 +1454,7 @@ func (n *NIMService) GetInferenceServiceParams() *rendertypes.InferenceServicePa
 	delete(params.PodAnnotations, utils.NvidiaAnnotationParentSpecHashKey)
 
 	// Set template spec
-	params.IsAutoScalingEnabled = n.IsAutoScalingEnabled()
-	if !params.IsAutoScalingEnabled {
+	if !n.IsAutoScalingEnabled() {
 		params.MinReplicas = int32(n.GetReplicas())
 	} else {
 		hpa := n.GetHPA()

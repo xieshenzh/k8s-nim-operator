@@ -16,6 +16,7 @@ spec:
     {{- if .MinReplicas }}
     minReplicas: {{ .MinReplicas }}
     {{- end }}
+    {{- if eq .DeploymentMode "RawDeployment" }}
     {{- if .MaxReplicas }}
     maxReplicas: {{ .MaxReplicas }}
     {{- end }}
@@ -28,7 +29,6 @@ spec:
     {{- if .ScaleTarget }}
     scaleTarget: {{ .ScaleTarget }}
     {{- end }}
-    {{- if .IsAutoScalingEnabled }}
     deploymentStrategy:
       type: RollingUpdate
       rollingUpdate:
@@ -175,4 +175,18 @@ spec:
     {{- range .ImagePullSecrets }}
       - name: {{ . }}
     {{- end }}
+    {{- end }}
+    {{- if eq .DeploymentMode "RawDeployment" }}
+    securityContext:
+      {{- if eq .OrchestratorType "TKGS" }}
+      seccompProfile:
+        type: RuntimeDefault
+      {{- end }}
+      {{- if .UserID }}
+      runAsUser: {{ .UserID }}
+      {{- end }}
+      {{- if .GroupID }}
+      runAsGroup: {{ .GroupID }}
+      fsGroup: {{ .GroupID }}
+      {{- end }}
     {{- end }}
