@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"strings"
 	"time"
 
@@ -142,31 +141,53 @@ func (r *NIMServiceReconciler) reconcileNIMService(ctx context.Context, nimServi
 		return ctrl.Result{}, err
 	}
 
-	// Sync Service Monitor
-	if nimService.IsServiceMonitorEnabled() {
-		err = r.renderAndSyncResource(ctx, nimService, &monitoringv1.ServiceMonitor{}, func() (client.Object, error) {
-			return r.renderer.ServiceMonitor(getServiceMonitorParams(nimService))
-		}, "servicemonitor", conditions.ReasonServiceMonitorFailed)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-	}
-
-	modelPVC, modelProfile, errCache := r.renderAndSyncCache(ctx, nimService)
-	if errCache != nil {
-		return ctrl.Result{}, errCache
+	var modelPVC *appsv1alpha1.PersistentVolumeClaim
+	var modelProfile string
+	modelPVC, modelProfile, err = r.renderAndSyncCache(ctx, nimService)
+	if err != nil {
+		return ctrl.Result{}, err
 	} else if modelPVC == nil {
 		return ctrl.Result{}, nil
 	}
 
-	err = r.renderAndSyncInferenceService(ctx, nimService, modelPVC, modelProfile)
+	var deploymentMode kserveconstants.DeploymentModeType
+	// Check KServe deployment mode
+	deploymentMode, err = r.getKServeDeploymentMode(ctx, nimService.Spec.Annotations)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	if result, err := r.checkInferenceServiceStatus(ctx,
+	if deploymentMode == kserveconstants.RawDeployment {
+		// Sync service
+		err = r.renderAndSyncResource(ctx, nimService, &corev1.Service{}, func() (client.Object, error) {
+			return r.renderer.Service(nimService.GetServiceParams())
+		}, "service", conditions.ReasonServiceFailed)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+
+		// Sync Service Monitor
+		if nimService.IsServiceMonitorEnabled() {
+			err = r.renderAndSyncResource(ctx, nimService, &monitoringv1.ServiceMonitor{}, func() (client.Object, error) {
+				return r.renderer.ServiceMonitor(nimService.GetServiceMonitorParams())
+			}, "servicemonitor", conditions.ReasonServiceMonitorFailed)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+	}
+
+	err = r.renderAndSyncInferenceService(ctx, nimService, modelPVC, modelProfile, deploymentMode)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	var result *ctrl.Result
+	result, err = r.checkInferenceServiceStatus(ctx,
 		&types.NamespacedName{Name: nimService.GetName(), Namespace: nimService.GetNamespace()},
-		nimService); err != nil {
+		nimService, deploymentMode)
+
+	if err != nil {
 		r.log.Error(err, "Unable to update status")
 		return ctrl.Result{}, err
 	} else {
@@ -382,10 +403,14 @@ func (r *NIMServiceReconciler) reconcilePVC(ctx context.Context, nimService *app
 }
 
 func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context,
-	nimService *appsv1alpha1.NIMService, modelPVC *appsv1alpha1.PersistentVolumeClaim, modelProfile string) error {
+	nimService *appsv1alpha1.NIMService, modelPVC *appsv1alpha1.PersistentVolumeClaim,
+	modelProfile string, deploymentMode kserveconstants.DeploymentModeType) error {
+
 	logger := r.log
 
-	isvcParams := nimService.GetInferenceServiceParams()
+	isvcParams := nimService.GetInferenceServiceParams(deploymentMode)
+	isvcParams.DeploymentMode = string(deploymentMode)
+
 	isvcParams.OrchestratorType = string(r.orchestratorType)
 
 	// Setup volume mounts with model store
@@ -426,15 +451,6 @@ func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context
 	// Setup metrics exporting
 	isvcParams.Annotations["serving.kserve.io/enable-metric-aggregation"] = "true"
 	isvcParams.Annotations["serving.kserve.io/enable-prometheus-scraping"] = "true"
-	isvcParams.Annotations["prometheus.kserve.io/path"] = "/metrics"
-	isvcParams.Annotations["prometheus.kserve.io/port"] = "8000"
-
-	// Check KServe deployment mode
-	if deploymentMode, err := r.getKServeDeploymentMode(ctx, isvcParams); err != nil {
-		return err
-	} else {
-		isvcParams.DeploymentMode = string(deploymentMode)
-	}
 
 	// Sync InferenceService
 	err := r.renderAndSyncResource(ctx, nimService, &kservev1beta1.InferenceService{}, func() (client.Object, error) {
@@ -577,7 +593,7 @@ func (r *NIMServiceReconciler) getTensorParallelismByProfile(profile *appsv1alph
 }
 
 func (r *NIMServiceReconciler) checkInferenceServiceStatus(ctx context.Context, namespacedName *types.NamespacedName,
-	nimService *appsv1alpha1.NIMService) (*ctrl.Result, error) {
+	nimService *appsv1alpha1.NIMService, deploymentMode kserveconstants.DeploymentModeType) (*ctrl.Result, error) {
 	logger := r.log
 
 	// Check if InferenceService is ready
@@ -606,7 +622,7 @@ func (r *NIMServiceReconciler) checkInferenceServiceStatus(ctx context.Context, 
 			"NIMService %s not ready yet, msg: %s", nimService.Name, msg)
 	} else {
 		// Update NIMServiceStatus with model config.
-		updateErr := r.updateModelStatus(ctx, nimService, namespacedName)
+		updateErr := r.updateModelStatus(ctx, nimService, namespacedName, deploymentMode)
 		if updateErr != nil {
 			logger.Info("WARN: Model status update failed, will retry in 5 seconds", "error", updateErr.Error())
 			return &ctrl.Result{RequeueAfter: 5 * time.Second}, nil
@@ -652,12 +668,12 @@ func (r *NIMServiceReconciler) isInferenceServiceReady(ctx context.Context, name
 }
 
 func (r *NIMServiceReconciler) updateModelStatus(ctx context.Context, nimService *appsv1alpha1.NIMService,
-	namespacedName *types.NamespacedName) error {
-	clusterEndpoint, externalEndpoint, err := r.getNIMModelEndpoints(ctx, nimService, namespacedName)
+	namespacedName *types.NamespacedName, deploymentMode kserveconstants.DeploymentModeType) error {
+	clusterEndpoint, externalEndpoint, err := r.getNIMModelEndpoints(ctx, nimService, namespacedName, deploymentMode)
 	if err != nil {
 		return err
 	}
-	//todo
+
 	modelName, err := r.getNIMModelName(ctx, clusterEndpoint)
 	if err != nil {
 		return err
@@ -672,7 +688,7 @@ func (r *NIMServiceReconciler) updateModelStatus(ctx context.Context, nimService
 }
 
 func (r *NIMServiceReconciler) getNIMModelEndpoints(ctx context.Context, nimService *appsv1alpha1.NIMService,
-	namespacedName *types.NamespacedName) (string, string, error) {
+	namespacedName *types.NamespacedName, deploymentMode kserveconstants.DeploymentModeType) (string, string, error) {
 	logger := r.log
 
 	isvc := &kservev1beta1.InferenceService{}
@@ -691,16 +707,19 @@ func (r *NIMServiceReconciler) getNIMModelEndpoints(ctx context.Context, nimServ
 		return "", "", err
 	}
 
-	var clusterEndpoint string
-	if isvc.Status.Address != nil && isvc.Status.Address.URL != nil {
-		clusterEndpoint = isvc.Status.Address.URL.String()
-	} else {
-		err := fmt.Errorf("cluster endpoint not available, nimservice %s", nimService.GetName())
-		logger.Error(err, "unable to get cluster endpoint", "nimservice", nimService.GetName(), "inferenceservice", isvc.GetName())
-		return "", "", err
-	}
+	if deploymentMode == kserveconstants.RawDeployment {
+		// Lookup NIMCache instance in the same namespace as the NIMService instance
+		svc := &corev1.Service{}
+		if err := r.Get(ctx, types.NamespacedName{Name: nimService.GetName(), Namespace: nimService.GetNamespace()}, svc); err != nil {
+			logger.Error(err, "unable to fetch k8s service", "nimservice", nimService.GetName())
+			return "", "", err
+		}
 
-	return clusterEndpoint, externalEndpoint, nil
+		port := nimService.GetServicePort()
+
+		return fmt.Sprintf("http://%s", utils.FormatEndpoint(svc.Spec.ClusterIP, port)), externalEndpoint, nil
+	}
+	return externalEndpoint, externalEndpoint, nil
 }
 
 func (r *NIMServiceReconciler) getNIMModelName(ctx context.Context, nimServiceEndpoint string) (string, error) {
@@ -837,42 +856,8 @@ func getModelNameFromModelsList(modelsList *nimmodels.ModelsV1List) (string, err
 	return "", fmt.Errorf("no valid model found")
 }
 
-func getServiceMonitorParams(nimService *appsv1alpha1.NIMService) *rendertypes.ServiceMonitorParams {
-	params := &rendertypes.ServiceMonitorParams{}
-	serviceMonitor := nimService.GetServiceMonitor()
-	params.Enabled = nimService.IsServiceMonitorEnabled()
-	params.Name = nimService.GetName()
-	params.Namespace = nimService.GetNamespace()
-	svcLabels := nimService.GetServiceLabels()
-	maps.Copy(svcLabels, serviceMonitor.AdditionalLabels)
-	params.Labels = svcLabels
-	params.Annotations = nimService.GetServiceMonitorAnnotations()
-
-	// Set Service Monitor spec
-	smSpec := monitoringv1.ServiceMonitorSpec{
-		NamespaceSelector: monitoringv1.NamespaceSelector{MatchNames: []string{nimService.Namespace}},
-		Selector:          metav1.LabelSelector{MatchLabels: nimService.GetServiceLabels()},
-		Endpoints: []monitoringv1.Endpoint{
-			{
-				Path:          "/metrics",
-				Port:          "http-autometric",
-				ScrapeTimeout: serviceMonitor.ScrapeTimeout,
-				Interval:      serviceMonitor.Interval,
-			},
-			{
-				Path:          "/metrics",
-				Port:          "http-usermetric",
-				ScrapeTimeout: serviceMonitor.ScrapeTimeout,
-				Interval:      serviceMonitor.Interval,
-			},
-		},
-	}
-	params.SMSpec = smSpec
-	return params
-}
-
 func (r *NIMServiceReconciler) getKServeDeploymentMode(ctx context.Context,
-	isvcParams *rendertypes.InferenceServiceParams) (kserveconstants.DeploymentModeType, error) {
+	podAnnotations map[string]string) (kserveconstants.DeploymentModeType, error) {
 
 	var namespace string
 	deploymentList := &appsv1.DeploymentList{}
@@ -906,7 +891,7 @@ func (r *NIMServiceReconciler) getKServeDeploymentMode(ctx context.Context,
 	}
 
 	// get annotations from isvc
-	annotations := kserveutils.Filter(isvcParams.Annotations, func(key string) bool {
+	annotations := kserveutils.Filter(podAnnotations, func(key string) bool {
 		return !kserveutils.Includes(isvcConfig.ServiceAnnotationDisallowedList, key)
 	})
 
