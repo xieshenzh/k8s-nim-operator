@@ -159,8 +159,10 @@ func (r *NIMServiceReconciler) reconcileNIMService(ctx context.Context, nimServi
 
 	if deploymentMode == kserveconstants.RawDeployment {
 		// Sync service
+		serviceParams := nimService.GetServiceParams()
+		serviceParams.SelectorLabels = map[string]string{kserveconstants.InferenceServiceLabel: nimService.Name}
 		err = r.renderAndSyncResource(ctx, nimService, &corev1.Service{}, func() (client.Object, error) {
-			return r.renderer.Service(nimService.GetServiceParams())
+			return r.renderer.Service(serviceParams)
 		}, "service", conditions.ReasonServiceFailed)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -451,6 +453,11 @@ func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context
 	// Setup metrics exporting
 	isvcParams.Annotations["serving.kserve.io/enable-metric-aggregation"] = "true"
 	isvcParams.Annotations["serving.kserve.io/enable-prometheus-scraping"] = "true"
+
+	// Sync ingress
+	if !nimService.IsIngressEnabled() {
+		isvcParams.Labels[kserveconstants.NetworkVisibility] = kserveconstants.ClusterLocalVisibility
+	}
 
 	// Sync InferenceService
 	err := r.renderAndSyncResource(ctx, nimService, &kservev1beta1.InferenceService{}, func() (client.Object, error) {
