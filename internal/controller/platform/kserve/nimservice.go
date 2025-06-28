@@ -451,8 +451,8 @@ func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context
 	isvcParams.PodResourceClaims = shared.GetPodResourceClaims(namedDraResources)
 
 	// Setup metrics exporting
-	isvcParams.Annotations["serving.kserve.io/enable-metric-aggregation"] = "true"
-	isvcParams.Annotations["serving.kserve.io/enable-prometheus-scraping"] = "true"
+	isvcParams.Annotations[kserveconstants.EnableMetricAggregation] = "true"
+	isvcParams.Annotations[kserveconstants.SetPrometheusAnnotation] = "true"
 
 	// Sync ingress
 	if !nimService.IsIngressEnabled() {

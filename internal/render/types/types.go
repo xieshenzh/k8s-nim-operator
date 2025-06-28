@@ -278,11 +278,11 @@ type InferenceServiceParams struct {
 	Annotations        map[string]string
 	PodAnnotations     map[string]string
 	SelectorLabels     map[string]string
-	MinReplicas        int32
-	MaxReplicas        int32
+	MinReplicas        *int32
+	MaxReplicas        *int32
 	ScaleMetricType    string
 	ScaleMetric        string
-	ScaleTarget        int32
+	ScaleTarget        *int32
 	ContainerName      string
 	Args               []string
 	Command            []string

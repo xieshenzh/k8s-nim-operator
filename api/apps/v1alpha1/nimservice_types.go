@@ -1458,14 +1458,16 @@ func (n *NIMService) GetInferenceServiceParams(
 
 	// Set template spec
 	if !n.IsAutoScalingEnabled() || deploymentMode != kserveconstants.RawDeployment {
-		params.MinReplicas = int32(n.GetReplicas())
+		params.MinReplicas = ptr.To[int32](int32(n.GetReplicas()))
 	} else {
+		params.Annotations[kserveconstants.AutoscalerClass] = string(kserveconstants.AutoscalerClassHPA)
+
 		minReplicas, maxReplicas, metric, metricType, target := n.GetInferenceServiceHPAParams()
 		if minReplicas != nil {
-			params.MinReplicas = *minReplicas
+			params.MinReplicas = minReplicas
 		}
 		if maxReplicas > 0 {
-			params.MaxReplicas = maxReplicas
+			params.MaxReplicas = ptr.To[int32](maxReplicas)
 		}
 		if metric != "" {
 			params.ScaleMetric = metric
@@ -1474,7 +1476,7 @@ func (n *NIMService) GetInferenceServiceParams(
 			params.ScaleMetricType = metricType
 		}
 		if target > 0 {
-			params.ScaleTarget = target
+			params.ScaleTarget = ptr.To(target)
 		}
 	}
 

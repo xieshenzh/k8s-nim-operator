@@ -69,3 +69,18 @@ spec:
       initialDelaySeconds: 120
       timeoutSeconds: 300
       periodSeconds: 10
+  metrics:
+    enabled: true
+  scale:
+    enabled: true
+    hpa:
+      minReplicas: 1
+      maxReplicas: 3
+      metrics:
+      - type: "Resource"
+        resource:
+          name: "cpu"
+          target:
+            type: "Utilization"
+            averageUtilization: 80
+
