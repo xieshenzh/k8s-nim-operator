@@ -143,7 +143,8 @@ func (r *NIMServiceReconciler) reconcileNIMService(ctx context.Context, nimServi
 
 	var modelPVC *appsv1alpha1.PersistentVolumeClaim
 	var modelProfile string
-	modelPVC, modelProfile, err = r.renderAndSyncCache(ctx, nimService)
+	var nimCache *appsv1alpha1.NIMCache
+	modelPVC, modelProfile, nimCache, err = r.renderAndSyncCache(ctx, nimService)
 	if err != nil {
 		return ctrl.Result{}, err
 	} else if modelPVC == nil {
@@ -158,16 +159,6 @@ func (r *NIMServiceReconciler) reconcileNIMService(ctx context.Context, nimServi
 	}
 
 	if deploymentMode == kserveconstants.RawDeployment {
-		// Sync service
-		serviceParams := nimService.GetServiceParams()
-		serviceParams.SelectorLabels = map[string]string{kserveconstants.InferenceServiceLabel: nimService.Name}
-		err = r.renderAndSyncResource(ctx, nimService, &corev1.Service{}, func() (client.Object, error) {
-			return r.renderer.Service(serviceParams)
-		}, "service", conditions.ReasonServiceFailed)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-
 		// Sync Service Monitor
 		if nimService.IsServiceMonitorEnabled() {
 			err = r.renderAndSyncResource(ctx, nimService, &monitoringv1.ServiceMonitor{}, func() (client.Object, error) {
@@ -179,7 +170,7 @@ func (r *NIMServiceReconciler) reconcileNIMService(ctx context.Context, nimServi
 		}
 	}
 
-	err = r.renderAndSyncInferenceService(ctx, nimService, modelPVC, modelProfile, deploymentMode)
+	err = r.renderAndSyncInferenceService(ctx, nimService, modelPVC, modelProfile, nimCache, deploymentMode)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -262,7 +253,7 @@ func (r *NIMServiceReconciler) renderAndSyncResource(ctx context.Context, nimSer
 }
 
 func (r *NIMServiceReconciler) renderAndSyncCache(ctx context.Context,
-	nimService *appsv1alpha1.NIMService) (*appsv1alpha1.PersistentVolumeClaim, string, error) {
+	nimService *appsv1alpha1.NIMService) (*appsv1alpha1.PersistentVolumeClaim, string, *appsv1alpha1.NIMCache, error) {
 	logger := r.log
 
 	var modelPVC *appsv1alpha1.PersistentVolumeClaim
@@ -270,9 +261,9 @@ func (r *NIMServiceReconciler) renderAndSyncCache(ctx context.Context,
 
 	// Select PVC for model store
 	nimCacheName := nimService.GetNIMCacheName()
-	if nimCacheName != "" {
-		nimCache := appsv1alpha1.NIMCache{}
-		if err := r.Get(ctx, types.NamespacedName{Name: nimCacheName, Namespace: nimService.GetNamespace()}, &nimCache); err != nil {
+	nimCache := &appsv1alpha1.NIMCache{}
+	if nimCacheName != "" { // nolint:gocritic
+		if err := r.Get(ctx, types.NamespacedName{Name: nimCacheName, Namespace: nimService.GetNamespace()}, nimCache); err != nil {
 			// Fail the NIMService if the NIMCache is not found
 			if k8serrors.IsNotFound(err) {
 				msg := fmt.Sprintf("NIMCache %s not found", nimCacheName)
@@ -281,11 +272,11 @@ func (r *NIMServiceReconciler) renderAndSyncCache(ctx context.Context,
 				logger.Info(msg, "nimcache", nimCacheName, "nimservice", nimService.Name)
 				if statusUpdateErr != nil {
 					logger.Error(statusUpdateErr, "failed to update status", "nimservice", nimService.Name)
-					return nil, "", statusUpdateErr
+					return nil, "", nil, statusUpdateErr
 				}
-				return nil, "", nil
+				return nil, "", nil, nil
 			}
-			return nil, "", err
+			return nil, "", nil, err
 		}
 
 		switch nimCache.Status.State {
@@ -305,7 +296,7 @@ func (r *NIMServiceReconciler) renderAndSyncCache(ctx context.Context,
 			if err != nil {
 				logger.Error(err, "failed to update status", "nimservice", nimService.Name)
 			}
-			return nil, "", err
+			return nil, "", nil, err
 		default:
 			msg := fmt.Sprintf("NIMCache %s not ready", nimCacheName)
 			err := r.updater.SetConditionsNotReady(ctx, nimService, conditions.ReasonNIMCacheNotReady, msg)
@@ -315,14 +306,14 @@ func (r *NIMServiceReconciler) renderAndSyncCache(ctx context.Context,
 			if err != nil {
 				logger.Error(err, "failed to update status", "nimservice", nimService.Name)
 			}
-			return nil, "", err
+			return nil, "", nil, err
 		}
 
 		// Fetch PVC for the associated NIMCache instance and mount it
 		if nimCache.Status.PVC == "" {
 			err := fmt.Errorf("missing PVC for the nimcache instance %s", nimCache.GetName())
 			logger.Error(err, "unable to obtain pvc backing the nimcache instance")
-			return nil, "", err
+			return nil, "", nil, err
 		}
 		if nimCache.Spec.Storage.PVC.Name == "" {
 			nimCache.Spec.Storage.PVC.Name = nimCache.Status.PVC
@@ -341,7 +332,7 @@ func (r *NIMServiceReconciler) renderAndSyncCache(ctx context.Context,
 		modelPVC, err = r.reconcilePVC(ctx, nimService)
 		if err != nil {
 			logger.Error(err, "unable to create pvc")
-			return nil, "", err
+			return nil, "", nil, err
 		}
 	} else if nimService.Spec.Storage.PVC.Name != "" {
 		// Use an existing PVC
@@ -349,10 +340,10 @@ func (r *NIMServiceReconciler) renderAndSyncCache(ctx context.Context,
 	} else {
 		err := fmt.Errorf("neither external PVC name or NIMCache volume is provided")
 		logger.Error(err, "failed to determine PVC for model-store")
-		return nil, "", err
+		return nil, "", nil, err
 	}
 
-	return modelPVC, modelProfile, nil
+	return modelPVC, modelProfile, nimCache, nil
 }
 
 func (r *NIMServiceReconciler) reconcilePVC(ctx context.Context, nimService *appsv1alpha1.NIMService) (*appsv1alpha1.PersistentVolumeClaim, error) {
@@ -405,8 +396,8 @@ func (r *NIMServiceReconciler) reconcilePVC(ctx context.Context, nimService *app
 }
 
 func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context,
-	nimService *appsv1alpha1.NIMService, modelPVC *appsv1alpha1.PersistentVolumeClaim,
-	modelProfile string, deploymentMode kserveconstants.DeploymentModeType) error {
+	nimService *appsv1alpha1.NIMService, modelPVC *appsv1alpha1.PersistentVolumeClaim, modelProfile string,
+	nimCache *appsv1alpha1.NIMCache, deploymentMode kserveconstants.DeploymentModeType) error {
 
 	logger := r.log
 
@@ -427,23 +418,33 @@ func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context
 		}
 		isvcParams.Env = append(isvcParams.Env, profileEnv)
 
-		// Retrieve and set profile details from NIMCache
-		var profile *appsv1alpha1.NIMProfile
-		var err error
-		profile, err = r.getNIMCacheProfile(ctx, nimService, modelProfile)
-		if err != nil {
-			logger.Error(err, "Failed to get cached NIM profile")
-			return err
-		}
-
-		// Auto assign GPU resources in case of the optimized profile
-		if profile != nil {
-			if err = r.assignGPUResources(ctx, nimService, profile, isvcParams); err != nil {
+		// Only assign GPU resources if the NIMCache is for optimized NIM
+		if nimCache.IsOptimizedNIM() {
+			// Retrieve and set profile details from NIMCache
+			var profile *appsv1alpha1.NIMProfile
+			var err error
+			profile, err = r.getNIMCacheProfile(ctx, nimService, modelProfile)
+			if err != nil {
+				logger.Error(err, "Failed to get cached NIM profile")
 				return err
+			}
+
+			// Auto assign GPU resources in case of the optimized profile
+			if profile != nil {
+				if err = r.assignGPUResources(ctx, nimService, profile, isvcParams); err != nil {
+					return err
+				}
 			}
 		}
 
 		// TODO: assign GPU resources and node selector that is required for the selected profile
+	}
+
+	if nimCache.IsUniversalNIM() {
+		isvcParams.Env = append(isvcParams.Env, corev1.EnvVar{
+			Name:  "NIM_MODEL_NAME",
+			Value: utils.DefaultModelStorePath,
+		})
 	}
 
 	// Setup pod resource claims
@@ -697,16 +698,34 @@ func (r *NIMServiceReconciler) getNIMModelEndpoints(ctx context.Context, nimServ
 	}
 
 	if deploymentMode == kserveconstants.RawDeployment {
-		// Lookup NIMCache instance in the same namespace as the NIMService instance
-		svc := &corev1.Service{}
-		if err := r.Get(ctx, types.NamespacedName{Name: nimService.GetName(), Namespace: nimService.GetNamespace()}, svc); err != nil {
+		labelMap := nimService.GetServiceLabels()
+		labels := make([]string, 0, len(labelMap))
+		for k, v := range labelMap {
+			labels = append(labels, fmt.Sprintf("%s: %s", k, v))
+		}
+
+		svcList := &corev1.ServiceList{}
+		if err := r.List(ctx, svcList, client.HasLabels(labels)); err != nil {
 			logger.Error(err, "unable to fetch k8s service", "nimservice", nimService.GetName())
 			return "", "", err
 		}
+		if len(svcList.Items) < 1 {
+			err := fmt.Errorf("service not found, nimservice %s", nimService.GetName())
+			logger.Error(err, "unable to find service", "nimservice", nimService.GetName(), "inferenceservice", isvc.GetName())
+			return "", "", err
+		}
 
-		port := nimService.GetServicePort()
+		for _, service := range svcList.Items {
+			for _, port := range service.Spec.Ports {
+				if port.Name == appsv1alpha1.DefaultNamedPortAPI {
+					return utils.FormatEndpoint(service.Spec.ClusterIP, port.Port), externalEndpoint, nil
+				}
+			}
+		}
 
-		return fmt.Sprintf("http://%s", utils.FormatEndpoint(svc.Spec.ClusterIP, port)), externalEndpoint, nil
+		err := fmt.Errorf("service not available, nimservice %s", nimService.GetName())
+		logger.Error(err, "unable to find service", "nimservice", nimService.GetName(), "inferenceservice", isvc.GetName())
+		return "", "", err
 	}
 	return externalEndpoint, externalEndpoint, nil
 }
