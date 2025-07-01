@@ -53,7 +53,6 @@ import (
 	"github.com/NVIDIA/k8s-nim-operator/internal/k8sutil"
 	"github.com/NVIDIA/k8s-nim-operator/internal/nimmodels"
 	"github.com/NVIDIA/k8s-nim-operator/internal/render"
-	rendertypes "github.com/NVIDIA/k8s-nim-operator/internal/render/types"
 	"github.com/NVIDIA/k8s-nim-operator/internal/shared"
 	"github.com/NVIDIA/k8s-nim-operator/internal/utils"
 )
@@ -192,21 +191,9 @@ func (r *NIMServiceReconciler) renderAndSyncResource(ctx context.Context, nimSer
 	obj client.Object, renderFunc func() (client.Object, error), conditionType string, reason string) error {
 	logger := r.log
 
-	namespacedName := types.NamespacedName{Name: nimService.GetName(), Namespace: nimService.GetNamespace()}
-
-	err := r.Get(ctx, namespacedName, obj)
-	if err != nil && !k8serrors.IsNotFound(err) {
-		logger.Error(err, fmt.Sprintf("Error is not NotFound for %s: %v", obj.GetObjectKind(), err))
-		return err
-	}
-	// Don't do anything if CR is unchanged.
-	if err == nil && !utils.IsParentSpecChanged(obj, utils.DeepHashObject(nimService.Spec)) {
-		return nil
-	}
-
 	resource, err := renderFunc()
 	if err != nil {
-		logger.Error(err, "failed to render", conditionType, namespacedName)
+		logger.Error(err, "failed to render", "conditionType", conditionType)
 		statusError := r.updater.SetConditionsFailed(ctx, nimService, reason, err.Error())
 		if statusError != nil {
 			logger.Error(statusError, "failed to update status", "nimservice", nimService.Name)
@@ -228,6 +215,18 @@ func (r *NIMServiceReconciler) renderAndSyncResource(ctx context.Context, nimSer
 
 	if metaAccessor == nil || metaAccessor.GetName() == "" || metaAccessor.GetNamespace() == "" {
 		logger.V(2).Info("rendered un-initialized resource")
+		return nil
+	}
+
+	namespacedName := types.NamespacedName{Name: resource.GetName(), Namespace: resource.GetNamespace()}
+
+	err = r.Get(ctx, namespacedName, obj)
+	if err != nil && !k8serrors.IsNotFound(err) {
+		logger.Error(err, fmt.Sprintf("Error is not NotFound for %s: %v", obj.GetObjectKind(), err))
+		return err
+	}
+	// Don't do anything if CR is unchanged.
+	if err == nil && !utils.IsParentSpecChanged(obj, utils.DeepHashObject(nimService.Spec)) {
 		return nil
 	}
 
@@ -401,27 +400,24 @@ func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context
 
 	logger := r.log
 
-	isvcParams := nimService.GetInferenceServiceParams(deploymentMode)
-	isvcParams.DeploymentMode = string(deploymentMode)
-
-	isvcParams.OrchestratorType = string(r.orchestratorType)
-
-	// Setup volume mounts with model store
-	isvcParams.Volumes = nimService.GetVolumes(*modelPVC)
-	isvcParams.VolumeMounts = nimService.GetVolumeMounts(*modelPVC)
+	var profileEnv *corev1.EnvVar
+	var profile *appsv1alpha1.NIMProfile
+	var gpuResources *corev1.ResourceRequirements
+	var initContainers []corev1.Container
+	var renderFunc func() (client.Object, error)
+	var conType, failedCon string
+	var renderObj client.Object
 
 	// Setup env for explicit override profile is specified
 	if modelProfile != "" {
-		profileEnv := corev1.EnvVar{
+		profileEnv = &corev1.EnvVar{
 			Name:  "NIM_MODEL_PROFILE",
 			Value: modelProfile,
 		}
-		isvcParams.Env = append(isvcParams.Env, profileEnv)
 
 		// Only assign GPU resources if the NIMCache is for optimized NIM
 		if nimCache.IsOptimizedNIM() {
 			// Retrieve and set profile details from NIMCache
-			var profile *appsv1alpha1.NIMProfile
 			var err error
 			profile, err = r.getNIMCacheProfile(ctx, nimService, modelProfile)
 			if err != nil {
@@ -431,7 +427,9 @@ func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context
 
 			// Auto assign GPU resources in case of the optimized profile
 			if profile != nil {
-				if err = r.assignGPUResources(ctx, nimService, profile, isvcParams); err != nil {
+				gpuResources, err = r.addGPUResources(ctx, nimService, profile)
+				if err != nil {
+					logger.Error(err, "Failed to get GPU resources")
 					return err
 				}
 			}
@@ -440,16 +438,11 @@ func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context
 		// TODO: assign GPU resources and node selector that is required for the selected profile
 	}
 
-	if nimCache.IsUniversalNIM() {
-		isvcParams.Env = append(isvcParams.Env, corev1.EnvVar{
-			Name:  "NIM_MODEL_NAME",
-			Value: utils.DefaultModelStorePath,
-		})
-	}
-
-	// Setup pod resource claims
+	initContainers = nimService.GetInitContainers()
 	namedDraResources := shared.GenerateNamedDRAResources(nimService)
-	isvcParams.PodResourceClaims = shared.GetPodResourceClaims(namedDraResources)
+
+	isvcParams := nimService.GetInferenceServiceParams(deploymentMode)
+	isvcParams.DeploymentMode = string(deploymentMode)
 
 	// Setup metrics exporting
 	isvcParams.Annotations[kserveconstants.EnableMetricAggregation] = "true"
@@ -460,21 +453,42 @@ func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context
 		isvcParams.Labels[kserveconstants.NetworkVisibility] = kserveconstants.ClusterLocalVisibility
 	}
 
-	// Sync InferenceService
-	err := r.renderAndSyncResource(ctx, nimService, &kservev1beta1.InferenceService{}, func() (client.Object, error) {
+	isvcParams.OrchestratorType = string(r.orchestratorType)
+
+	isvcParams.PodResourceClaims = shared.GetPodResourceClaims(namedDraResources)
+	if nimCache.IsUniversalNIM() {
+		isvcParams.Env = append(isvcParams.Env, corev1.EnvVar{
+			Name:  "NIM_MODEL_NAME",
+			Value: utils.DefaultModelStorePath,
+		})
+	}
+	// Setup volume mounts with model store
+	isvcParams.Volumes = nimService.GetVolumes(*modelPVC)
+	isvcParams.VolumeMounts = nimService.GetVolumeMounts(*modelPVC)
+	if profileEnv != nil {
+		isvcParams.Env = append(isvcParams.Env, *profileEnv)
+	}
+	// Auto assign GPU resources in case of the optimized profile
+	if gpuResources != nil {
+		isvcParams.Resources = gpuResources
+	}
+	renderFunc = func() (client.Object, error) {
 		result, err := r.renderer.InferenceService(isvcParams)
 		if err != nil {
 			return nil, err
 		}
-		initContainers := nimService.GetInitContainers()
 		if len(initContainers) > 0 {
 			result.Spec.Predictor.InitContainers = initContainers
 		}
 		// Update Container resources with DRA resource claims.
 		shared.UpdateContainerResourceClaims(result.Spec.Predictor.Containers, namedDraResources)
-		return result, err
+		return result, nil
+	}
+	conType = "InferenceService"
+	failedCon = conditions.ReasonDeploymentFailed
+	renderObj = &kservev1beta1.InferenceService{}
 
-	}, "inferenceservice", conditions.ReasonInferenceServiceFailed)
+	err := r.renderAndSyncResource(ctx, nimService, renderObj, renderFunc, conType, failedCon)
 	if err != nil {
 		return err
 	}
@@ -513,73 +527,79 @@ func (r *NIMServiceReconciler) getNIMCacheProfile(ctx context.Context, nimServic
 	return nil, nil
 }
 
-// assignGPUResources automatically assigns GPU resources to the NIMService based on the provided profile,
+// addGPUResources automatically assigns GPU resources to the NIMService based on the provided profile,
 // but retains any user-specified GPU resources if they are explicitly provided.
 //
-// This function retrieves the tensor parallelism (TP) value from the provided profile config to determine
+// In case of monolithic NIMs, this function retrieves the tensor parallelism (TP) value from the provided profile config to determine
 // the number of GPUs to be allocated. If the TP value is defined and no GPU resources have been
 // explicitly provided by the user, the function allocates GPUs according to the TP value.
 // If the TP value is not present, the function defaults to allocating 1 GPU.
-func (r *NIMServiceReconciler) assignGPUResources(ctx context.Context, nimService *appsv1alpha1.NIMService,
-	profile *appsv1alpha1.NIMProfile, isvcParams *rendertypes.InferenceServiceParams) error {
-	logger := r.log
+//
+// In case of multi-node NIMs, this function assigns the number of GPUs equal to .spec.multiNode.gpuPerWorker.
+func (r *NIMServiceReconciler) addGPUResources(ctx context.Context, nimService *appsv1alpha1.NIMService, profile *appsv1alpha1.NIMProfile) (*corev1.ResourceRequirements, error) {
+	logger := log.FromContext(ctx)
 
 	// TODO: Refine this to detect GPU claims and only assign GPU resources if no GPU claims are present.
 	if len(nimService.Spec.DRAResources) > 0 {
 		logger.Info("DRAResources found, skipping GPU resource assignment", "DRAResources", nimService.Spec.DRAResources)
-		return nil
+		return nil, nil
 	}
 
 	// TODO: Make the resource name configurable
 	const gpuResourceName = corev1.ResourceName("nvidia.com/gpu")
 
 	// Check if the user has already provided a GPU resource quantity in the requests or limits
-	if isvcParams.Resources != nil {
-		if _, gpuRequested := isvcParams.Resources.Requests[gpuResourceName]; gpuRequested {
+	if nimService.Spec.Resources != nil {
+		if _, gpuRequested := nimService.Spec.Resources.Requests[gpuResourceName]; gpuRequested {
 			logger.V(2).Info("User has provided GPU resource requests, skipping auto-assignment", "gpuResource", gpuResourceName)
-			return nil
+			return nimService.Spec.Resources, nil
 		}
-		if _, gpuLimit := isvcParams.Resources.Limits[gpuResourceName]; gpuLimit {
+		if _, gpuLimit := nimService.Spec.Resources.Limits[gpuResourceName]; gpuLimit {
 			logger.V(2).Info("User has provided GPU resource limits, skipping auto-assignment", "gpuResource", gpuResourceName)
-			return nil
+			return nimService.Spec.Resources, nil
 		}
 	}
 
-	// If no user-provided GPU resource is found, proceed with auto-assignment
-	// Get tensorParallelism from the profile
-	tensorParallelism, err := utils.GetTensorParallelismByProfileTags(profile.Config)
-	if err != nil {
-		logger.Error(err, "Failed to retrieve tensorParallelism")
-		return err
+	gpuQuantity := apiResource.MustParse("1")
+	var err error
+	// if deployed as multi-node, use the GPU per worker value to assign GPU resources to each worker
+	// TODO auto determine base on tp*pp/(.spec.multiNode.size)
+	if nimService.Spec.MultiNode != nil {
+		gpuQuantity, err = apiResource.ParseQuantity(fmt.Sprintf("%d", nimService.Spec.MultiNode.GPUSPerPod))
+		if err != nil {
+			logger.Error(err, "Failed to parse GPU per worker value")
+			return nil, err
+		}
+	} else {
+		// If no user-provided GPU resource is found, proceed with auto-assignment
+		// Get tensorParallelism from the profile
+		tensorParallelism, err := utils.GetTensorParallelismByProfileTags(profile.Config)
+		if err != nil {
+			logger.Error(err, "Failed to retrieve tensorParallelism")
+			return nil, err
+		}
+		if tensorParallelism != "" {
+			gpuQuantity, err = apiResource.ParseQuantity(tensorParallelism)
+			if err != nil {
+				logger.Error(err, "Failed to parse tensorParallelism")
+				return nil, err
+			}
+		}
 	}
 
-	// Initialize the Resources field if not already initialized
-	if isvcParams.Resources == nil {
-		isvcParams.Resources = &corev1.ResourceRequirements{
+	var resources *corev1.ResourceRequirements
+	if nimService.Spec.Resources != nil {
+		resources = nimService.Spec.Resources
+	} else {
+		resources = &corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{},
 			Limits:   corev1.ResourceList{},
 		}
 	}
 
-	// Assign GPU resources based on tensorParallelism, or default to 1 GPU if tensorParallelism is not available
-	gpuQuantity := apiResource.MustParse("1") // Default to 1 GPU
-
-	if tensorParallelism != "" {
-		gpuQuantity, err = apiResource.ParseQuantity(tensorParallelism)
-		if err != nil {
-			return fmt.Errorf("failed to parse tensorParallelism: %w", err)
-		}
-
-		logger.V(2).Info("Auto-assigning GPU resources based on tensorParallelism", "tensorParallelism", tensorParallelism, "gpuQuantity", gpuQuantity.String())
-	} else {
-		logger.V(2).Info("tensorParallelism not found, assigning 1 GPU by default", "Profile", profile.Name)
-	}
-
-	// Assign the GPU quantity for both requests and limits
-	isvcParams.Resources.Requests[gpuResourceName] = gpuQuantity
-	isvcParams.Resources.Limits[gpuResourceName] = gpuQuantity
-
-	return nil
+	resources.Requests[gpuResourceName] = gpuQuantity
+	resources.Limits[gpuResourceName] = gpuQuantity
+	return resources, nil
 }
 
 func (r *NIMServiceReconciler) checkInferenceServiceStatus(ctx context.Context, namespacedName *types.NamespacedName,
@@ -698,34 +718,14 @@ func (r *NIMServiceReconciler) getNIMModelEndpoints(ctx context.Context, nimServ
 	}
 
 	if deploymentMode == kserveconstants.RawDeployment {
-		labelMap := nimService.GetServiceLabels()
-		labels := make([]string, 0, len(labelMap))
-		for k, v := range labelMap {
-			labels = append(labels, fmt.Sprintf("%s: %s", k, v))
-		}
-
-		svcList := &corev1.ServiceList{}
-		if err := r.List(ctx, svcList, client.HasLabels(labels)); err != nil {
-			logger.Error(err, "unable to fetch k8s service", "nimservice", nimService.GetName())
+		if isvc.Status.Address != nil && isvc.Status.Address.URL != nil {
+			clusterEndpoint := isvc.Status.Address.URL.String()
+			return clusterEndpoint, externalEndpoint, nil
+		} else {
+			err := fmt.Errorf("cluster endpoint not available, nimservice %s", nimService.GetName())
+			logger.Error(err, "unable to get cluster endpoint", "nimservice", nimService.GetName(), "inferenceservice", isvc.GetName())
 			return "", "", err
 		}
-		if len(svcList.Items) < 1 {
-			err := fmt.Errorf("service not found, nimservice %s", nimService.GetName())
-			logger.Error(err, "unable to find service", "nimservice", nimService.GetName(), "inferenceservice", isvc.GetName())
-			return "", "", err
-		}
-
-		for _, service := range svcList.Items {
-			for _, port := range service.Spec.Ports {
-				if port.Name == appsv1alpha1.DefaultNamedPortAPI {
-					return utils.FormatEndpoint(service.Spec.ClusterIP, port.Port), externalEndpoint, nil
-				}
-			}
-		}
-
-		err := fmt.Errorf("service not available, nimservice %s", nimService.GetName())
-		logger.Error(err, "unable to find service", "nimservice", nimService.GetName(), "inferenceservice", isvc.GetName())
-		return "", "", err
 	}
 	return externalEndpoint, externalEndpoint, nil
 }
@@ -737,7 +737,7 @@ func (r *NIMServiceReconciler) getNIMModelName(ctx context.Context, nimServiceEn
 	modelsList, err := nimmodels.ListModelsV1(ctx, nimServiceEndpoint, "")
 	if err != nil {
 		logger.Error(err, "Failed to list models", "endpoint", nimServiceEndpoint)
-		// Check if it's an HTTP error with a status code
+		// Check if err is an HTTP error with a status code
 		if nimmodels.IsNotFound(err) {
 			// The endpoint does not exist
 			logger.V(2).Error(err, "URI does not exist", "uri", nimmodels.ModelsV1URI, "endpoint", nimServiceEndpoint)
