@@ -25,6 +25,7 @@ import (
 
 	appsv1alpha1 "github.com/NVIDIA/k8s-nim-operator/api/apps/v1alpha1"
 	"github.com/NVIDIA/k8s-nim-operator/internal/controller/platform/kserve"
+	"github.com/NVIDIA/k8s-nim-operator/internal/controller/platform/llmisvc"
 	"github.com/NVIDIA/k8s-nim-operator/internal/controller/platform/standalone"
 	"github.com/NVIDIA/k8s-nim-operator/internal/shared"
 )
@@ -42,6 +43,8 @@ func GetInferencePlatform(inferencePlatformType appsv1alpha1.PlatformType) (Infe
 		return &standalone.Standalone{}, nil
 	case appsv1alpha1.PlatformTypeKServe:
 		return &kserve.KServe{}, nil
+	case appsv1alpha1.PlatformTypeLLMISVC:
+		return &llmisvc.LLMISVC{}, nil
 	default:
 		return nil, fmt.Errorf("unsupported platform type: %s", inferencePlatformType)
 	}

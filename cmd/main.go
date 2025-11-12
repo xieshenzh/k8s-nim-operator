@@ -76,7 +76,7 @@ func main() {
 
 	flag.StringVar(&platformType, "platform", "", "DEPRECATED: Default platform for all NIMServices. "+
 		"Use the 'platform' field in NIMService CR instead. If specified, this value is used as fallback "+
-		"when NIMService doesn't specify a platform. Valid values: 'standalone', 'kserve'.")
+		"when NIMService doesn't specify a platform. Valid values: 'standalone', 'kserve', 'llmisvc'.")
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metric endpoint binds to. "+
 		"Use the port :8080. If not set, it will be 0 in order to disable the metrics server")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -99,7 +99,7 @@ func main() {
 	if platformType != "" {
 		setupLog.Info("DEPRECATED: Global platform flag is deprecated. Use 'platform' field in NIMService CR instead.", "platform", platformType)
 		switch platformType {
-		case "standalone", "kserve":
+		case "standalone", "kserve", "llmisvc":
 			// Valid platform types for the deprecated global platform flag. No need to throw an error.
 		default:
 			setupLog.Error(nil, "unsupported model-serving platform type", "platformType", platformType)

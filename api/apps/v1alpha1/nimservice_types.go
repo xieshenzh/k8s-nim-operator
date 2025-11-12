@@ -87,6 +87,8 @@ const (
 	PlatformTypeStandalone PlatformType = "standalone"
 	// PlatformTypeKServe represents KServe deployment platform.
 	PlatformTypeKServe PlatformType = "kserve"
+	// PlatformTypeKServe represents kserve+llm-d deployment platform.
+	PlatformTypeLLMISVC PlatformType = "llmisvc"
 )
 
 // NIMServiceSpec defines the desired state of NIMService.
@@ -132,7 +134,7 @@ type NIMServiceSpec struct {
 	MultiNode        *NimServiceMultiNodeConfig `json:"multiNode,omitempty"`
 	// InferencePlatform specifies the inference platform to use for this NIMService.
 	// Valid values are "standalone" (default) and "kserve".
-	// +kubebuilder:validation:Enum=standalone;kserve
+	// +kubebuilder:validation:Enum=standalone;kserve;llmisvc
 	// +kubebuilder:default:="standalone"
 	InferencePlatform PlatformType `json:"inferencePlatform,omitempty"`
 }
