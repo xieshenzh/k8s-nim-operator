@@ -163,7 +163,7 @@ func (r *NIMServiceReconciler) reconcileNIMService(ctx context.Context, nimServi
 		return ctrl.Result{}, err
 	}
 
-	if deploymentMode == kserveconstants.RawDeployment {
+	if deploymentMode == kserveconstants.Standard {
 		// Sync Service Monitor
 		if nimService.IsServiceMonitorEnabled() {
 			err = r.renderAndSyncResource(ctx, nimService, &monitoringv1.ServiceMonitor{}, func() (client.Object, error) {
@@ -965,7 +965,7 @@ func (r *NIMServiceReconciler) getKServeDeploymentMode(ctx context.Context,
 		return "", err
 	}
 
-	deploymentMode := isvcutils.GetDeploymentMode(annotations, deployConfig)
+	deploymentMode := isvcutils.GetDeploymentMode("", annotations, deployConfig)
 	return deploymentMode, nil
 }
 

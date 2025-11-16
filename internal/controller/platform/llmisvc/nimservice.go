@@ -400,7 +400,7 @@ func (r *NIMServiceReconciler) reconcilePVC(ctx context.Context, nimService *app
 	return &nimService.Spec.Storage.PVC, nil
 }
 
-func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context,
+func (r *NIMServiceReconciler) renderAndSyncLLMInferenceService(ctx context.Context,
 	nimService *appsv1alpha1.NIMService, modelPVC *appsv1alpha1.PersistentVolumeClaim, modelProfile string,
 	nimCache *appsv1alpha1.NIMCache, deploymentMode kserveconstants.DeploymentModeType) error {
 
@@ -506,7 +506,7 @@ func (r *NIMServiceReconciler) renderAndSyncInferenceService(ctx context.Context
 		isvcParams.Resources = gpuResources
 	}
 	renderFunc = func() (client.Object, error) {
-		result, err := r.renderer.InferenceService(isvcParams)
+		result, err := r.renderer.LLMInferenceService(isvcParams)
 		if err != nil {
 			return nil, err
 		}

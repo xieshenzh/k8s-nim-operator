@@ -1019,7 +1019,7 @@ var _ = Describe("NIMServiceReconciler for a KServe platform", func() {
 			err = client.Update(context.TODO(), isvc)
 			Expect(err).ToNot(HaveOccurred())
 
-			err = reconciler.updateModelStatus(context.Background(), nimService, kserveconstants.Serverless)
+			err = reconciler.updateModelStatus(context.Background(), nimService, kserveconstants.Knative)
 			Expect(err).To(HaveOccurred())
 			Expect(nimService.Status.Model).To(BeNil())
 		})
@@ -1044,7 +1044,7 @@ var _ = Describe("NIMServiceReconciler for a KServe platform", func() {
 			err = client.Update(context.TODO(), isvc)
 			Expect(err).ToNot(HaveOccurred())
 
-			err = reconciler.updateModelStatus(context.Background(), nimService, kserveconstants.Serverless)
+			err = reconciler.updateModelStatus(context.Background(), nimService, kserveconstants.Knative)
 			Expect(err).To(HaveOccurred())
 			Expect(nimService.Status.Model).To(BeNil())
 		})
@@ -1070,7 +1070,7 @@ var _ = Describe("NIMServiceReconciler for a KServe platform", func() {
 			err = client.Update(context.TODO(), isvc)
 			Expect(err).ToNot(HaveOccurred())
 
-			err = reconciler.updateModelStatus(context.Background(), nimService, kserveconstants.Serverless)
+			err = reconciler.updateModelStatus(context.Background(), nimService, kserveconstants.Knative)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(nimService.Status.Model).ToNot(BeNil())
 			Expect(nimService.Status.Model.Name).ToNot(BeEmpty())
@@ -1086,7 +1086,7 @@ var _ = Describe("NIMServiceReconciler for a KServe platform", func() {
 			err = client.Update(context.TODO(), isvc)
 			Expect(err).ToNot(HaveOccurred())
 
-			err = reconciler.updateModelStatus(context.Background(), nimService, kserveconstants.Serverless)
+			err = reconciler.updateModelStatus(context.Background(), nimService, kserveconstants.Knative)
 			Expect(err).ToNot(HaveOccurred())
 			modelStatus := nimService.Status.Model
 			Expect(modelStatus).ToNot(BeNil())
@@ -1116,7 +1116,7 @@ var _ = Describe("NIMServiceReconciler for a KServe platform", func() {
 			err = client.Update(context.TODO(), isvc)
 			Expect(err).ToNot(HaveOccurred())
 
-			err = reconciler.updateModelStatus(context.Background(), nimService, kserveconstants.RawDeployment)
+			err = reconciler.updateModelStatus(context.Background(), nimService, kserveconstants.Standard)
 			Expect(err).ToNot(HaveOccurred())
 			modelStatus := nimService.Status.Model
 			Expect(modelStatus).ToNot(BeNil())
@@ -1149,7 +1149,7 @@ var _ = Describe("NIMServiceReconciler for a KServe platform", func() {
 				err = client.Update(context.TODO(), isvc)
 				Expect(err).ToNot(HaveOccurred())
 
-				err = reconciler.updateModelStatus(context.Background(), nimService, kserveconstants.RawDeployment)
+				err = reconciler.updateModelStatus(context.Background(), nimService, kserveconstants.Standard)
 				Expect(err).ToNot(HaveOccurred())
 				modelStatus := nimService.Status.Model
 				Expect(modelStatus).ToNot(BeNil())
@@ -1561,14 +1561,14 @@ var _ = Describe("NIMServiceReconciler for a KServe platform", func() {
 
 		It("should return err when InferenceService is missing", func() {
 			_ = client.Delete(context.TODO(), isvc)
-			_, _, err := reconciler.getNIMModelEndpoints(context.TODO(), nimService, kserveconstants.RawDeployment)
+			_, _, err := reconciler.getNIMModelEndpoints(context.TODO(), nimService, kserveconstants.Standard)
 			Expect(err).To(HaveOccurred())
 			Expect(errors.IsNotFound(err)).To(BeTrue())
 			Expect(err).Should(MatchError("inferenceservices.serving.kserve.io \"test-nimservice\" not found"))
 		})
 
 		It("should return error when external endpoint is not set", func() {
-			_, _, err := reconciler.getNIMModelEndpoints(context.TODO(), nimService, kserveconstants.RawDeployment)
+			_, _, err := reconciler.getNIMModelEndpoints(context.TODO(), nimService, kserveconstants.Standard)
 			Expect(err).To(HaveOccurred())
 			Expect(err).Should(MatchError("external endpoint not available, nimservice test-nimservice"))
 		})
@@ -1578,7 +1578,7 @@ var _ = Describe("NIMServiceReconciler for a KServe platform", func() {
 			isvc.Status.URL, err = knativeapis.ParseURL("external.example.com")
 			Expect(err).ToNot(HaveOccurred())
 			_ = client.Update(context.TODO(), isvc)
-			_, _, err = reconciler.getNIMModelEndpoints(context.TODO(), nimService, kserveconstants.RawDeployment)
+			_, _, err = reconciler.getNIMModelEndpoints(context.TODO(), nimService, kserveconstants.Standard)
 			Expect(err).To(HaveOccurred())
 			Expect(err).Should(MatchError("cluster endpoint not available, nimservice test-nimservice"))
 		})
@@ -1591,7 +1591,7 @@ var _ = Describe("NIMServiceReconciler for a KServe platform", func() {
 			isvc.Status.Address.URL, err = knativeapis.ParseURL("cluster.example.com")
 			Expect(err).ToNot(HaveOccurred())
 			_ = client.Update(context.TODO(), isvc)
-			internal, external, err := reconciler.getNIMModelEndpoints(context.TODO(), nimService, kserveconstants.Serverless)
+			internal, external, err := reconciler.getNIMModelEndpoints(context.TODO(), nimService, kserveconstants.Knative)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(internal).To(Equal("cluster.example.com"))
 			Expect(external).To(Equal("external.example.com"))
@@ -1605,7 +1605,7 @@ var _ = Describe("NIMServiceReconciler for a KServe platform", func() {
 			isvc.Status.Address.URL, err = knativeapis.ParseURL("cluster.example.com")
 			Expect(err).ToNot(HaveOccurred())
 			_ = client.Update(context.TODO(), isvc)
-			internal, external, err := reconciler.getNIMModelEndpoints(context.TODO(), nimService, kserveconstants.RawDeployment)
+			internal, external, err := reconciler.getNIMModelEndpoints(context.TODO(), nimService, kserveconstants.Standard)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(internal).To(Equal("cluster.example.com"))
 			Expect(external).To(Equal("external.example.com"))

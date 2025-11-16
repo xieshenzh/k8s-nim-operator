@@ -34,6 +34,7 @@ import (
 	"text/template"
 
 	"github.com/Masterminds/sprig/v3"
+	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	kservev1beta1 "github.com/kserve/kserve/pkg/apis/serving/v1beta1"
 	securityv1 "github.com/openshift/api/security/v1"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
@@ -82,6 +83,7 @@ type Renderer interface {
 	ConfigMap(params *types.ConfigMapParams) (*corev1.ConfigMap, error)
 	Secret(params *types.SecretParams) (*corev1.Secret, error)
 	InferenceService(params *types.InferenceServiceParams) (*kservev1beta1.InferenceService, error)
+	LLMInferenceService(params *types.LLMInferenceServiceParams) (*kservev1alpha1.LLMInferenceService, error)
 	ResourceClaimTemplate(params *types.ResourceClaimTemplateParams) (*resourcev1beta2.ResourceClaimTemplate, error)
 }
 
@@ -484,6 +486,25 @@ func (r *textTemplateRenderer) InferenceService(params *types.InferenceServicePa
 		return nil, fmt.Errorf("error converting unstructured object to InferenceService: %w", err)
 	}
 	return inferenceService, nil
+}
+
+// LLMInferenceService renders a LLMInferenceService spec with given templating data.
+func (r *textTemplateRenderer) LLMInferenceService(params *types.LLMInferenceServiceParams) (*kservev1alpha1.LLMInferenceService, error) {
+	objs, err := r.renderFile(path.Join(r.directory, "llminferenceservice.yaml"), &TemplateData{Data: params})
+	if err != nil {
+		return nil, err
+	}
+
+	if len(objs) == 0 {
+		return nil, nil
+	}
+
+	llmInferenceService := &kservev1alpha1.LLMInferenceService{}
+	err = runtime.DefaultUnstructuredConverter.FromUnstructured(objs[0].Object, llmInferenceService)
+	if err != nil {
+		return nil, fmt.Errorf("error converting unstructured object to LLMInferenceService: %w", err)
+	}
+	return llmInferenceService, nil
 }
 
 // ResourceClaimTemplate renders a ResourceClaimTemplate spec with given templating data.

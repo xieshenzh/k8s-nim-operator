@@ -133,7 +133,7 @@ type NIMServiceSpec struct {
 	Proxy            *ProxySpec                 `json:"proxy,omitempty"`
 	MultiNode        *NimServiceMultiNodeConfig `json:"multiNode,omitempty"`
 	// InferencePlatform specifies the inference platform to use for this NIMService.
-	// Valid values are "standalone" (default) and "kserve".
+	// Valid values are "standalone" (default), "kserve" and "llmisvc".
 	// +kubebuilder:validation:Enum=standalone;kserve;llmisvc
 	// +kubebuilder:default:="standalone"
 	InferencePlatform PlatformType `json:"inferencePlatform,omitempty"`
@@ -1640,7 +1640,7 @@ func (n *NIMService) GetInferenceServiceParams(
 	delete(params.PodAnnotations, utils.NvidiaAnnotationParentSpecHashKey)
 
 	// Set template spec
-	if !n.IsAutoScalingEnabled() || deploymentMode != kserveconstants.RawDeployment {
+	if !n.IsAutoScalingEnabled() || deploymentMode != kserveconstants.Standard {
 		params.MinReplicas = n.GetReplicas()
 	} else {
 		params.Annotations[kserveconstants.AutoscalerClass] = string(kserveconstants.AutoscalerClassHPA)
@@ -1710,7 +1710,7 @@ func (n *NIMService) GetInferenceServiceParams(
 
 // GetInferenceServiceLivenessProbe returns liveness probe for the NIMService container.
 func (n *NIMService) GetInferenceServiceLivenessProbe(modeType kserveconstants.DeploymentModeType) *corev1.Probe {
-	if modeType == kserveconstants.RawDeployment {
+	if modeType == kserveconstants.Standard {
 		if n.Spec.LivenessProbe.Probe == nil {
 			return n.GetDefaultLivenessProbe()
 		}
@@ -1746,7 +1746,7 @@ func (n *NIMService) GetInferenceServiceLivenessProbe(modeType kserveconstants.D
 
 // GetInferenceServiceReadinessProbe returns readiness probe for the NIMService container.
 func (n *NIMService) GetInferenceServiceReadinessProbe(modeType kserveconstants.DeploymentModeType) *corev1.Probe {
-	if modeType == kserveconstants.RawDeployment {
+	if modeType == kserveconstants.Standard {
 		if n.Spec.ReadinessProbe.Probe == nil {
 			return n.GetDefaultReadinessProbe()
 		}
@@ -1782,7 +1782,7 @@ func (n *NIMService) GetInferenceServiceReadinessProbe(modeType kserveconstants.
 
 // GetInferenceServiceStartupProbe returns startup probe for the NIMService container.
 func (n *NIMService) GetInferenceServiceStartupProbe(modeType kserveconstants.DeploymentModeType) *corev1.Probe {
-	if modeType == kserveconstants.RawDeployment {
+	if modeType == kserveconstants.Standard {
 		if n.Spec.StartupProbe.Probe == nil {
 			return n.GetDefaultStartupProbe()
 		}
@@ -1821,7 +1821,7 @@ func (n *NIMService) GetInferenceServicePorts(modeType kserveconstants.Deploymen
 	ports := []corev1.ContainerPort{}
 
 	// Setup container ports for nimservice
-	if modeType == kserveconstants.RawDeployment {
+	if modeType == kserveconstants.Standard {
 		ports = append(ports, corev1.ContainerPort{
 			Name:          DefaultNamedPortAPI,
 			Protocol:      corev1.ProtocolTCP,
