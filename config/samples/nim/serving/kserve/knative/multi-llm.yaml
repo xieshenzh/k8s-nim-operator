@@ -1,29 +1,28 @@
 ---
-# NIM Cache LLM-Specific NIM
+# NIM Cache Multi-LLM NIM
 apiVersion: apps.nvidia.com/v1alpha1
 kind: NIMCache
 metadata:
-  labels:
-    app.kubernetes.io/name: k8s-nim-operator
-  name: meta-llama-3-2-1b-instruct
+  name: nim-cache-multi-llm
   namespace: nim-service
 spec:
   source:
-    ngc:
-      modelPuller: nvcr.io/nim/meta/llama-3.2-1b-instruct:1.12.0
+    hf:
+      endpoint: "https://huggingface.co"
+      namespace: "nvidia"
+      authSecret: hf-api-secret
+      modelPuller: nvcr.io/nim/nvidia/llm-nim:1.12
       pullSecret: ngc-secret
-      authSecret: ngc-api-secret
-      model:
-        engine: "tensorrt"
-        tensorParallelism: "1"
+      modelName: "Llama-3.1-Nemotron-Nano-8B-v1"
   storage:
     pvc:
       create: true
+      storageClass: ''
       size: "50Gi"
       volumeAccessMode: ReadWriteOnce
 
 ---
-# NIM Service LLM-Specific NIM
+# NIM Service LLM-Specific NIM with Knative Deployment
 apiVersion: apps.nvidia.com/v1alpha1
 kind: NIMService
 metadata:
@@ -32,6 +31,7 @@ metadata:
 spec:
   inferencePlatform: kserve
   annotations:
+    serving.kserve.io/deploymentMode: 'Knative'
     # Knative concurrency-based autoscaling (default).
     autoscaling.knative.dev/class: kpa.autoscaling.knative.dev
     autoscaling.knative.dev/metric: concurrency
@@ -42,16 +42,16 @@ spec:
     # Limit scaling to 100 pods.
     autoscaling.knative.dev/max-scale: "10"
   image:
-    repository: nvcr.io/nim/meta/llama-3.2-1b-instruct
-    tag: "1.12.0"
+    repository: nvcr.io/nim/nvidia/llm-nim
+    tag: "1.12"
     pullPolicy: IfNotPresent
     pullSecrets:
       - ngc-secret
   authSecret: ngc-api-secret
   storage:
     nimCache:
-      name: meta-llama-3-2-1b-instruct
-      profile: ''
+      name: nim-cache-multi-llm
+      profile: 'tensorrt_llm'
   resources:
     limits:
       nvidia.com/gpu: 1

@@ -504,41 +504,41 @@ func validateKServeConfiguration(spec *appsv1alpha1.NIMServiceSpec, fldPath *fie
 	platformIsKServe := spec.InferencePlatform == appsv1alpha1.PlatformTypeKServe
 
 	// mode is the value, and annotated is true if the key-value pair exist.
-	mode, annotated := spec.Annotations["serving.kserve.org/deploymentMode"]
-	// If the annotation is absent, kserve defaults to serverless.
-	serverless := !annotated || strings.EqualFold(mode, "serverless")
+	mode, annotated := spec.Annotations["serving.kserve.io/deploymentMode"]
+	// If the annotation is absent, kserve defaults to standard.
+	knative := !annotated && strings.EqualFold(mode, "knative")
 
-	// When Spec.InferencePlatform is "kserve" and used in "serverless" mode:
-	if platformIsKServe && serverless {
+	// When Spec.InferencePlatform is "kserve" and used in "knative" mode:
+	if platformIsKServe && knative {
 		// Spec.Scale (autoscaling) cannot be set.
 		if spec.Scale.Enabled != nil && *spec.Scale.Enabled {
-			errList = append(errList, field.Forbidden(fldPath.Child("scale").Child("enabled"), fmt.Sprintf("%s (autoscaling) cannot be set when KServe runs in serverless mode", fldPath.Child("scale"))))
+			errList = append(errList, field.Forbidden(fldPath.Child("scale").Child("enabled"), fmt.Sprintf("%s (autoscaling) cannot be set when KServe runs in knative mode", fldPath.Child("scale"))))
 		}
 
 		// TODO deprecate this once we have removed the .spec.expose.ingress field from the spec
 		if spec.Expose.Ingress.Enabled != nil && *spec.Expose.Ingress.Enabled { //nolint:staticcheck
-			errList = append(errList, field.Forbidden(fldPath.Child("expose").Child("ingress").Child("enabled"), fmt.Sprintf("%s cannot be set when KServe runs in serverless mode", fldPath.Child("expose").Child("ingress").Child("enabled"))))
+			errList = append(errList, field.Forbidden(fldPath.Child("expose").Child("ingress").Child("enabled"), fmt.Sprintf("%s cannot be set when KServe runs in knative mode", fldPath.Child("expose").Child("ingress").Child("enabled"))))
 		}
 
 		// Spec.Expose.Router.Ingress cannot be set.
 		if spec.Expose.Router.Ingress != nil {
-			errList = append(errList, field.Forbidden(fldPath.Child("router").Child("ingress"), fmt.Sprintf("%s cannot be set when KServe runs in serverless mode", fldPath.Child("router").Child("ingress"))))
+			errList = append(errList, field.Forbidden(fldPath.Child("router").Child("ingress"), fmt.Sprintf("%s cannot be set when KServe runs in knative mode", fldPath.Child("router").Child("ingress"))))
 		}
 
 		// Spec.Expose.Router.Gateway cannot be set.
 		if spec.Expose.Router.Gateway != nil {
-			errList = append(errList, field.Forbidden(fldPath.Child("router").Child("gateway"), fmt.Sprintf("%s cannot be set when KServe runs in serverless mode", fldPath.Child("router").Child("gateway"))))
+			errList = append(errList, field.Forbidden(fldPath.Child("router").Child("gateway"), fmt.Sprintf("%s cannot be set when KServe runs in knative mode", fldPath.Child("router").Child("gateway"))))
 		}
 
 		// Spec.Metrics.ServiceMonitor cannot be set.
 		if spec.Metrics.Enabled != nil && *spec.Metrics.Enabled {
-			errList = append(errList, field.Forbidden(fldPath.Child("metrics").Child("enabled"), fmt.Sprintf("%s cannot be set when KServe runs in serverless mode", fldPath.Child("metrics").Child("serviceMonitor"))))
+			errList = append(errList, field.Forbidden(fldPath.Child("metrics").Child("enabled"), fmt.Sprintf("%s cannot be set when KServe runs in knative mode", fldPath.Child("metrics").Child("serviceMonitor"))))
 		}
 	}
 
 	// Spec.MultiNode cannot be enabled when inferencePlatform is kserve.
 	if platformIsKServe && spec.MultiNode != nil {
-		errList = append(errList, field.Forbidden(fldPath.Child("multiNode"), "cannot be set when KServe runs in serverless mode"))
+		errList = append(errList, field.Forbidden(fldPath.Child("multiNode"), "cannot be set when KServe runs in knative mode"))
 	}
 
 	return warningList, errList

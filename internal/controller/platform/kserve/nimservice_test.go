@@ -454,7 +454,7 @@ var _ = Describe("NIMServiceReconciler for a KServe platform", func() {
 				Namespace: "default",
 			},
 			Data: map[string]string{
-				"deploy": "{\"defaultDeploymentMode\": \"RawDeployment\"}",
+				"deploy": "{\"defaultDeploymentMode\": \"Standard\"}",
 			},
 		}
 		err = client.Create(context.TODO(), isvcConfig)
@@ -1573,7 +1573,7 @@ var _ = Describe("NIMServiceReconciler for a KServe platform", func() {
 			Expect(err).Should(MatchError("external endpoint not available, nimservice test-nimservice"))
 		})
 
-		It("should return error when cluster endpoint is not set for RawDeployment", func() {
+		It("should return error when cluster endpoint is not set for Standard", func() {
 			var err error
 			isvc.Status.URL, err = knativeapis.ParseURL("external.example.com")
 			Expect(err).ToNot(HaveOccurred())
@@ -1583,7 +1583,7 @@ var _ = Describe("NIMServiceReconciler for a KServe platform", func() {
 			Expect(err).Should(MatchError("cluster endpoint not available, nimservice test-nimservice"))
 		})
 
-		It("should return cluster endpoint for Serverless mode", func() {
+		It("should return cluster endpoint for Knative mode", func() {
 			var err error
 			isvc.Status.URL, err = knativeapis.ParseURL("external.example.com")
 			Expect(err).ToNot(HaveOccurred())
@@ -1597,7 +1597,7 @@ var _ = Describe("NIMServiceReconciler for a KServe platform", func() {
 			Expect(external).To(Equal("external.example.com"))
 		})
 
-		It("should return cluster endpoint for RawDeployment", func() {
+		It("should return cluster endpoint for Standard", func() {
 			var err error
 			isvc.Status.URL, err = knativeapis.ParseURL("external.example.com")
 			Expect(err).ToNot(HaveOccurred())

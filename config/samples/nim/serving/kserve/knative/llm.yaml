@@ -3,6 +3,8 @@
 apiVersion: apps.nvidia.com/v1alpha1
 kind: NIMCache
 metadata:
+  labels:
+    app.kubernetes.io/name: k8s-nim-operator
   name: meta-llama-3-2-1b-instruct
   namespace: nim-service
 spec:
@@ -17,7 +19,6 @@ spec:
   storage:
     pvc:
       create: true
-      storageClass:
       size: "50Gi"
       volumeAccessMode: ReadWriteOnce
 
@@ -31,19 +32,16 @@ metadata:
 spec:
   inferencePlatform: kserve
   annotations:
-    serving.kserve.io/deploymentMode: 'RawDeployment'
-  scale:
-    enabled: true
-    hpa:
-      minReplicas: 1
-      maxReplicas: 3
-      metrics:
-      - type: "Resource"
-        resource:
-          name: "cpu"
-          target:
-            type: "Utilization"
-            averageUtilization: 80
+    serving.kserve.io/deploymentMode: 'Knative'
+    # Knative concurrency-based autoscaling (default).
+    autoscaling.knative.dev/class: kpa.autoscaling.knative.dev
+    autoscaling.knative.dev/metric: concurrency
+    # Target 10 requests in-flight per pod.
+    autoscaling.knative.dev/target: "10"
+    # Disable scale to zero with a min scale of 1.
+    autoscaling.knative.dev/min-scale: "1"
+    # Limit scaling to 100 pods.
+    autoscaling.knative.dev/max-scale: "10"
   image:
     repository: nvcr.io/nim/meta/llama-3.2-1b-instruct
     tag: "1.12.0"
@@ -54,7 +52,7 @@ spec:
   storage:
     nimCache:
       name: meta-llama-3-2-1b-instruct
-  replicas: 1
+      profile: ''
   resources:
     limits:
       nvidia.com/gpu: 1
@@ -64,6 +62,7 @@ spec:
       nvidia.com/gpu: 1
       cpu: "4"
       memory: 6Gi
+  replicas: 1
   expose:
     service:
       type: ClusterIP

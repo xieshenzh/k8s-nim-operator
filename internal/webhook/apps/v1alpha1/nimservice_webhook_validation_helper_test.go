@@ -1008,26 +1008,26 @@ func TestValidateKServeConfiguration(t *testing.T) {
 			wantWarnings: 0,
 		},
 		{
-			name: "kserve serverless (annotation absent) – valid",
+			name: "kserve standard (annotation absent) – valid",
 			modify: func(ns *appsv1alpha1.NIMService) {
 				ns.Spec.InferencePlatform = appsv1alpha1.PlatformTypeKServe
-				// No annotation ⇒ serverless by default.
+				// No annotation ⇒ standard by default.
 			},
 			wantErrs:     0,
 			wantWarnings: 0,
 		},
 		{
-			name: "kserve serverless (annotation present) – autoscaling set",
+			name: "kserve knative (annotation present) – autoscaling set",
 			modify: func(ns *appsv1alpha1.NIMService) {
 				ns.Spec.InferencePlatform = appsv1alpha1.PlatformTypeKServe
-				ns.Spec.Annotations = map[string]string{"serving.kserve.org/deploymentMode": "Serverless"}
+				ns.Spec.Annotations = map[string]string{"serving.kserve.io/deploymentMode": "Knative"}
 				ns.Spec.Scale.Enabled = &trueVal
 			},
 			wantErrs:     1,
 			wantWarnings: 0,
 		},
 		{
-			name: "kserve serverless – ingress set",
+			name: "kserve knative – ingress set",
 			modify: func(ns *appsv1alpha1.NIMService) {
 				ns.Spec.InferencePlatform = appsv1alpha1.PlatformTypeKServe
 				ns.Spec.Expose.Router.Ingress = &appsv1alpha1.RouterIngress{
@@ -1038,7 +1038,7 @@ func TestValidateKServeConfiguration(t *testing.T) {
 			wantWarnings: 0,
 		},
 		{
-			name: "kserve serverless – servicemonitor set",
+			name: "kserve knative – servicemonitor set",
 			modify: func(ns *appsv1alpha1.NIMService) {
 				ns.Spec.InferencePlatform = appsv1alpha1.PlatformTypeKServe
 				ns.Spec.Metrics.Enabled = &trueVal
@@ -1047,7 +1047,7 @@ func TestValidateKServeConfiguration(t *testing.T) {
 			wantWarnings: 0,
 		},
 		{
-			name: "kserve serverless – all prohibited set",
+			name: "kserve knative – all prohibited set",
 			modify: func(ns *appsv1alpha1.NIMService) {
 				ns.Spec.InferencePlatform = appsv1alpha1.PlatformTypeKServe
 				ns.Spec.Scale.Enabled = &trueVal
@@ -1060,10 +1060,10 @@ func TestValidateKServeConfiguration(t *testing.T) {
 			wantWarnings: 0,
 		},
 		{
-			name: "kserve rawdeployment – allowed autoscaling, but multidnode forbidden",
+			name: "kserve standard – allowed autoscaling, but multidnode forbidden",
 			modify: func(ns *appsv1alpha1.NIMService) {
 				ns.Spec.InferencePlatform = appsv1alpha1.PlatformTypeKServe
-				ns.Spec.Annotations = map[string]string{"serving.kserve.org/deploymentMode": "RawDeployment"}
+				ns.Spec.Annotations = map[string]string{"serving.kserve.io/deploymentMode": "Standard"}
 				ns.Spec.Scale.Enabled = &trueVal // should be fine
 				ns.Spec.MultiNode = &appsv1alpha1.NimServiceMultiNodeConfig{Parallelism: &appsv1alpha1.ParallelismSpec{Pipeline: ptr.To(uint32(1))}}
 			},

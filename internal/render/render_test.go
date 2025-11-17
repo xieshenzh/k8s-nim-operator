@@ -646,7 +646,7 @@ var _ = Describe("K8s Resources Rendering", func() {
 						Effect:   corev1.TaintEffectNoSchedule,
 					},
 				},
-				DeploymentMode: "RawDeployment",
+				DeploymentMode: "Standard",
 			}
 
 			r := render.NewRenderer(templatesDir)
