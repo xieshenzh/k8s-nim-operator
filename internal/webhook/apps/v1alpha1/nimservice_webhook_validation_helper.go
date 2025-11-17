@@ -506,7 +506,7 @@ func validateKServeConfiguration(spec *appsv1alpha1.NIMServiceSpec, fldPath *fie
 	// mode is the value, and annotated is true if the key-value pair exist.
 	mode, annotated := spec.Annotations["serving.kserve.io/deploymentMode"]
 	// If the annotation is absent, kserve defaults to standard.
-	knative := !annotated && strings.EqualFold(mode, "knative")
+	knative := annotated && strings.EqualFold(mode, "knative")
 
 	// When Spec.InferencePlatform is "kserve" and used in "knative" mode:
 	if platformIsKServe && knative {

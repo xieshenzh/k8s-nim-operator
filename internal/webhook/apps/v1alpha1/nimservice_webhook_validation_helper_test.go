@@ -1030,6 +1030,7 @@ func TestValidateKServeConfiguration(t *testing.T) {
 			name: "kserve knative – ingress set",
 			modify: func(ns *appsv1alpha1.NIMService) {
 				ns.Spec.InferencePlatform = appsv1alpha1.PlatformTypeKServe
+				ns.Spec.Annotations = map[string]string{"serving.kserve.io/deploymentMode": "Knative"}
 				ns.Spec.Expose.Router.Ingress = &appsv1alpha1.RouterIngress{
 					IngressClass: "nginx",
 				}
@@ -1041,6 +1042,7 @@ func TestValidateKServeConfiguration(t *testing.T) {
 			name: "kserve knative – servicemonitor set",
 			modify: func(ns *appsv1alpha1.NIMService) {
 				ns.Spec.InferencePlatform = appsv1alpha1.PlatformTypeKServe
+				ns.Spec.Annotations = map[string]string{"serving.kserve.io/deploymentMode": "Knative"}
 				ns.Spec.Metrics.Enabled = &trueVal
 			},
 			wantErrs:     1,
@@ -1050,6 +1052,7 @@ func TestValidateKServeConfiguration(t *testing.T) {
 			name: "kserve knative – all prohibited set",
 			modify: func(ns *appsv1alpha1.NIMService) {
 				ns.Spec.InferencePlatform = appsv1alpha1.PlatformTypeKServe
+				ns.Spec.Annotations = map[string]string{"serving.kserve.io/deploymentMode": "Knative"}
 				ns.Spec.Scale.Enabled = &trueVal
 				ns.Spec.Expose.Router.Ingress = &appsv1alpha1.RouterIngress{
 					IngressClass: "nginx",
@@ -1057,6 +1060,19 @@ func TestValidateKServeConfiguration(t *testing.T) {
 				ns.Spec.Metrics.Enabled = &trueVal
 			},
 			wantErrs:     3,
+			wantWarnings: 0,
+		},
+		{
+			name: "kserve standard (annotation absent) – all set",
+			modify: func(ns *appsv1alpha1.NIMService) {
+				ns.Spec.InferencePlatform = appsv1alpha1.PlatformTypeKServe
+				ns.Spec.Scale.Enabled = &trueVal
+				ns.Spec.Expose.Router.Ingress = &appsv1alpha1.RouterIngress{
+					IngressClass: "nginx",
+				}
+				ns.Spec.Metrics.Enabled = &trueVal
+			},
+			wantErrs:     0,
 			wantWarnings: 0,
 		},
 		{
