@@ -1834,7 +1834,37 @@ func (n *NIMService) GetInferenceServiceParams(
 	for idx := range params.SidecarContainers {
 		params.SidecarContainers[idx].Env = utils.MergeEnvVars(n.getLWSCommonEnv(), params.SidecarContainers[idx].Env)
 	}
+
+	params.StorageUris = n.GetStorageUris()
+
 	return params
+}
+
+// GetStorageUris returns the storage URIs for the KServe InferenceService.
+// Storage URIs are only populated when the EnableKServeStorageAnnotationKey metadata annotation is set to "true"
+// and NIM_REPOSITORY_OVERRIDE is set in spec.env with a supported KServe storage protocol.
+func (n *NIMService) GetStorageUris() []rendertypes.StorageUri {
+	annotations := n.GetAnnotations()
+	if annotations == nil {
+		return nil
+	}
+	if v, ok := annotations[utils.EnableKServeStorageAnnotationKey]; !ok || v != "true" {
+		return nil
+	}
+	for _, env := range n.Spec.Env {
+		if env.Name == utils.NIMRepositoryOverrideEnvVar && env.Value != "" {
+			if !utils.HasKServeStorageProtocol(env.Value) {
+				return nil
+			}
+			return []rendertypes.StorageUri{
+				{
+					Uri:       env.Value,
+					MountPath: utils.DefaultModelStorePath,
+				},
+			}
+		}
+	}
+	return nil
 }
 
 // GetInferenceServiceLivenessProbe returns liveness probe for the NIMService container.

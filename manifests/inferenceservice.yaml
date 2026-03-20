@@ -35,6 +35,15 @@ spec:
         maxUnavailable: 25%
         maxSurge: 0
     {{- end }}
+    {{- if .StorageUris }}
+    storageUris:
+    {{- range .StorageUris }}
+    - uri: {{ .Uri }}
+      {{- if .MountPath }}
+      mountPath: {{ .MountPath }}
+      {{- end }}
+    {{- end }}
+    {{- end }}
     labels:
     {{- if .SelectorLabels }}
       {{- .SelectorLabels | yaml | nindent 6 }}

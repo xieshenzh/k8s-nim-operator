@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	kservev1beta1 "github.com/kserve/kserve/pkg/apis/serving/v1beta1"
 	kserveconstants "github.com/kserve/kserve/pkg/constants"
@@ -36,7 +37,27 @@ import (
 
 const (
 	KServeControllerName = "kserve-controller-manager"
+
+	// EnableKServeStorageAnnotationKey is the annotation key to enable KServe storage
+	// for downloading model artifacts via storageUris.
+	EnableKServeStorageAnnotationKey = "apps.nvidia.com/enable-kserve-storage"
+
+	// NIMRepositoryOverrideEnvVar is the environment variable name for NIM repository override.
+	NIMRepositoryOverrideEnvVar = "NIM_REPOSITORY_OVERRIDE"
 )
+
+// KServeStorageProtocols is the list of storage URI protocols supported by KServe.
+var KServeStorageProtocols = []string{"s3://", "gs://", "http://", "https://", "oci://"}
+
+// HasKServeStorageProtocol checks if the given URI starts with a supported KServe storage protocol.
+func HasKServeStorageProtocol(uri string) bool {
+	for _, protocol := range KServeStorageProtocols {
+		if strings.HasPrefix(uri, protocol) {
+			return true
+		}
+	}
+	return false
+}
 
 func IsKServeStandardDeploymentMode(deploymentMode kserveconstants.DeploymentModeType) bool {
 	return deploymentMode == kserveconstants.Standard || deploymentMode == kserveconstants.LegacyRawDeployment

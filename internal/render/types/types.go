@@ -335,6 +335,13 @@ type InferenceServiceParams struct {
 	SidecarContainers  []corev1.Container
 	PodResourceClaims  []corev1.PodResourceClaim
 	DeploymentMode     string
+	StorageUris        []StorageUri
+}
+
+// StorageUri defines a storage URI with a mount path for KServe InferenceService.
+type StorageUri struct {
+	Uri       string
+	MountPath string
 }
 
 type DRADeviceParams struct {
