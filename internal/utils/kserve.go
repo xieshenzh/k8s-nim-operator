@@ -42,21 +42,34 @@ const (
 	// for downloading model artifacts via storageUris.
 	EnableKServeStorageAnnotationKey = "apps.nvidia.com/enable-kserve-storage"
 
+	// KServeStorageSecretAnnotationKey is the annotation key to specify the secret
+	// for authenticating access to the storage backend (e.g., S3 credentials).
+	KServeStorageSecretAnnotationKey = "apps.nvidia.com/kserve-storage-secret"
+
 	// NIMRepositoryOverrideEnvVar is the environment variable name for NIM repository override.
 	NIMRepositoryOverrideEnvVar = "NIM_REPOSITORY_OVERRIDE"
 )
 
-// KServeStorageProtocols is the list of storage URI protocols supported by KServe.
-var KServeStorageProtocols = []string{"s3://", "gs://", "http://", "https://", "oci://"}
+// GetKServeStorageSecret returns the storage secret name from the annotations, or empty string if not set.
+func GetKServeStorageSecret(annotations map[string]string) string {
+	if annotations == nil {
+		return ""
+	}
+	return annotations[KServeStorageSecretAnnotationKey]
+}
 
-// HasKServeStorageProtocol checks if the given URI starts with a supported KServe storage protocol.
-func HasKServeStorageProtocol(uri string) bool {
+// KServeStorageProtocols is the list of storage URI protocols supported by KServe.
+var KServeStorageProtocols = []string{"s3://", "gs://", "http://", "https://"}
+
+// GetKServeStorageProtocol returns the protocol scheme name (e.g. "s3", "gs") if the URI
+// starts with a supported KServe storage protocol, or empty string if not supported.
+func GetKServeStorageProtocol(uri string) string {
 	for _, protocol := range KServeStorageProtocols {
 		if strings.HasPrefix(uri, protocol) {
-			return true
+			return strings.TrimSuffix(protocol, "://")
 		}
 	}
-	return false
+	return ""
 }
 
 func IsKServeStandardDeploymentMode(deploymentMode kserveconstants.DeploymentModeType) bool {

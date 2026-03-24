@@ -1171,7 +1171,16 @@ func (n *NIMService) GetServiceAccountParams() *rendertypes.ServiceAccountParams
 	params.Namespace = n.GetNamespace()
 	params.Labels = n.GetServiceLabels()
 	params.Annotations = n.GetNIMServiceAnnotations()
+	params.Secrets = n.GetServiceAccountSecrets()
 	return params
+}
+
+// GetServiceAccountSecrets returns the secrets to associate with the service account.
+func (n *NIMService) GetServiceAccountSecrets() []string {
+	if secretName := utils.GetKServeStorageSecret(n.GetAnnotations()); secretName != "" {
+		return []string{secretName}
+	}
+	return nil
 }
 
 // GetDeploymentParams returns params to render Deployment from templates.
@@ -1853,13 +1862,14 @@ func (n *NIMService) GetStorageUris() []rendertypes.StorageUri {
 	}
 	for _, env := range n.Spec.Env {
 		if env.Name == utils.NIMRepositoryOverrideEnvVar && env.Value != "" {
-			if !utils.HasKServeStorageProtocol(env.Value) {
+			protocol := utils.GetKServeStorageProtocol(env.Value)
+			if protocol == "" {
 				return nil
 			}
 			return []rendertypes.StorageUri{
 				{
 					Uri:       env.Value,
-					MountPath: utils.DefaultModelStorePath,
+					MountPath: fmt.Sprintf("%s/ngc/hub/%s", utils.DefaultModelStorePath, protocol),
 				},
 			}
 		}

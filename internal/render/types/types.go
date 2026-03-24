@@ -182,6 +182,7 @@ type ServiceAccountParams struct {
 	Namespace   string
 	Labels      map[string]string
 	Annotations map[string]string
+	Secrets     []string
 }
 
 // RoleParams holds the parameters for rendering a Role template.
